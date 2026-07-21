@@ -13,6 +13,21 @@ One tool layer, three surfaces:
 | **Local web app** | `npm run web` → http://localhost:4747 | Consumer-friendly UI: store cards, live quote, Stop button, order modal |
 | **MCP server** | `dist/mcp.js` via an MCP client | Claude Desktop / Claude Code users — **no API key needed**; your Claude subscription powers the model |
 
+**Which one is for me?**
+
+- **Comfortable with a terminal?** → Terminal chat. Fastest, most informative.
+- **Want something that feels like an app?** → Local web app. Cards, live
+  quote, a proper Place-order button.
+- **Already use Claude Desktop or Claude Code?** → MCP server. No API key,
+  no separate chat window — Claude itself becomes your ordering agent, and
+  order confirmation appears as a native dialog.
+
+**Roadmap** (watch [Releases](https://github.com/CydVilla/peckish/releases)):
+an **npm package** (`npm install -g peckish` — no git clone) and a
+**double-clickable Mac app (.dmg)** with guided setup — no terminal at any
+step — are next. Today's install is git-clone (below); everything runs on
+your own Mac either way, because DoorDash sign-in lives in your keychain.
+
 ```
 you › Find me a high-protein dinner under $25 that can arrive within 45
       minutes. Avoid mushrooms and excessive fees.
