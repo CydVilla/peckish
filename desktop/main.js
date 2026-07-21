@@ -235,6 +235,7 @@ const ALLOWED_EXTERNAL = [
   "https://github.com/doordash-oss/doordash-cli",
   "https://console.anthropic.com",
   "https://github.com/CydVilla/peckish",
+  "https://www.doordash.com", // "edit address" link in the web UI
 ];
 
 function wireExternalLinks(win) {

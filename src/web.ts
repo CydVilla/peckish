@@ -26,7 +26,15 @@ import {
   resetSessionUsage,
   type ChatMessage,
 } from "./agent.js";
-import { getDefaultAddress, openCartsLine, resolveDdCliPath, DdCliError } from "./ddcli.js";
+import {
+  getDefaultAddress,
+  listAddresses,
+  openCartsLine,
+  resolveDdCliPath,
+  ddJson,
+  DdCliError,
+  type SavedAddress,
+} from "./ddcli.js";
 import { setConfirmationProviders } from "./confirm.js";
 import { logEvent } from "./logger.js";
 import { listPreferences } from "./prefs.js";
@@ -91,6 +99,11 @@ let busy = false;
 let currentTurn: AbortController | null = null;
 let sessionContext: string | null = null;
 let addressLine: string | null = null;
+
+function formatAddress(def: SavedAddress | null): string | null {
+  if (!def) return null;
+  return `${def.label ? `"${def.label}" — ` : ""}${def.printable_address}`;
+}
 let bootCartsLine = "unknown";
 
 /** Tools whose results the UI renders as rich cards (clipped for safety). */
@@ -229,6 +242,30 @@ const server = createServer(async (req, res) => {
       return res.end(readFileSync(INDEX_HTML));
     }
 
+    if (req.method === "GET" && url.pathname === "/api/addresses") {
+      const addresses = await listAddresses();
+      return json(res, 200, {
+        addresses: addresses.map((a) => ({
+          address_id: a.address_id,
+          printable_address: a.printable_address,
+          label: a.label,
+          is_default: a.is_default,
+        })),
+      });
+    }
+
+    // Switch the account-wide default address. User-initiated from the header
+    // popover — the click on a specific address IS the explicit approval, so
+    // no modal; the agent-initiated path stays gated in tools.ts.
+    if (req.method === "POST" && url.pathname === "/api/address") {
+      if (busy) return json(res, 409, { error: "wait for the current turn to finish" });
+      const body = JSON.parse((await readBody(req)) || "{}") as { address_id?: string };
+      if (!body.address_id) return json(res, 400, { error: "address_id required" });
+      await ddJson(["address", "set", "--address-id", String(body.address_id), "--yes"]);
+      addressLine = formatAddress(await getDefaultAddress());
+      return json(res, 200, { ok: true, address: addressLine });
+    }
+
     if (req.method === "GET" && url.pathname === "/api/state") {
       return json(res, 200, {
         model: MODEL,
@@ -313,10 +350,7 @@ const server = createServer(async (req, res) => {
 
 try {
   const [def, carts] = await Promise.all([getDefaultAddress(), openCartsLine()]);
-  if (def) {
-    const label = def.label ? `"${def.label}" — ` : "";
-    addressLine = `${label}${def.printable_address}`;
-  }
+  addressLine = formatAddress(def);
   bootCartsLine = carts;
   console.log(`✓ DoorDash sign-in ok${addressLine ? ` (${addressLine})` : ""}`);
   if (carts !== "none" && carts !== "unknown") console.log(`  open carts: ${carts}`);

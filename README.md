@@ -151,7 +151,7 @@ anything and it backs off.
 | Where | What |
 |---|---|
 | Terminal | `/prefs` saved preferences · `/cost` session spend · `/reset` new conversation · `/quit` · **Ctrl+C stops a running turn** |
-| Web | **Stop** button cancels a turn · **New chat** resets · header chip shows session cost |
+| Web | **Stop** button cancels a turn · **New chat** resets · header chip shows session cost · click the **address chip** to switch your delivery address (editing an address's text happens on doordash.com — Peckish picks it up automatically) |
 | Both | Preferences live in `~/.peckish/preferences.json`; a full audit log of every tool call and confirmation is written to `~/.peckish/logs/*.jsonl` |
 
 **Cost:** defaults are tuned for low spend at decent quality — `claude-sonnet-5`
