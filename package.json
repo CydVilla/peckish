@@ -1,13 +1,38 @@
 {
   "name": "peckish",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Peckish — AI ordering agent for DoorDash. Terminal chat, local web app, and MCP server over dd-cli + Claude.",
   "type": "module",
-  "private": true,
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/CydVilla/peckish.git"
+  },
+  "homepage": "https://github.com/CydVilla/peckish#readme",
+  "bugs": {
+    "url": "https://github.com/CydVilla/peckish/issues"
+  },
+  "keywords": [
+    "doordash",
+    "ai",
+    "agent",
+    "claude",
+    "anthropic",
+    "mcp",
+    "food-delivery",
+    "cli",
+    "chatbot"
+  ],
   "bin": {
     "peckish": "./dist/index.js",
+    "peckish-web": "./dist/web.js",
     "peckish-mcp": "./dist/mcp.js"
   },
+  "files": [
+    "dist",
+    "public",
+    "README.md"
+  ],
   "scripts": {
     "dev": "tsx src/index.ts",
     "web": "tsx src/web.ts",
@@ -15,7 +40,8 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "typecheck": "tsc --noEmit",
-    "test": "node --import tsx --test tests/*.test.ts"
+    "test": "node --import tsx --test tests/*.test.ts",
+    "prepublishOnly": "npm run build && npm test"
   },
   "engines": {
     "node": ">=20"
