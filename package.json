@@ -24,9 +24,9 @@
     "chatbot"
   ],
   "bin": {
-    "peckish": "./dist/index.js",
-    "peckish-web": "./dist/web.js",
-    "peckish-mcp": "./dist/mcp.js"
+    "peckish": "dist/index.js",
+    "peckish-web": "dist/web.js",
+    "peckish-mcp": "dist/mcp.js"
   },
   "files": [
     "dist",
