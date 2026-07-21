@@ -9,9 +9,9 @@ One tool layer, three surfaces:
 
 | Surface | Start | Best for |
 |---|---|---|
-| **Terminal chat** | `npm run dev` | Living in the terminal |
-| **Local web app** | `npm run web` → http://localhost:4747 | Consumer-friendly UI: store cards, live quote, Stop button, order modal |
-| **MCP server** | `dist/mcp.js` via an MCP client | Claude Desktop / Claude Code users — **no API key needed**; your Claude subscription powers the model |
+| **Terminal chat** | `peckish` | Living in the terminal |
+| **Local web app** | `peckish-web` → http://localhost:4747 | Consumer-friendly UI: store cards, live quote, Stop button, order modal |
+| **MCP server** | `peckish-mcp` via an MCP client | Claude Desktop / Claude Code users — **no API key needed**; your Claude subscription powers the model |
 
 **Which one is for me?**
 
@@ -22,11 +22,16 @@ One tool layer, three surfaces:
   no separate chat window — Claude itself becomes your ordering agent, and
   order confirmation appears as a native dialog.
 
+Install in one line — no git clone:
+
+```sh
+npm install -g peckish
+```
+
 **Roadmap** (watch [Releases](https://github.com/CydVilla/peckish/releases)):
-an **npm package** (`npm install -g peckish` — no git clone) and a
-**double-clickable Mac app (.dmg)** with guided setup — no terminal at any
-step — are next. Today's install is git-clone (below); everything runs on
-your own Mac either way, because DoorDash sign-in lives in your keychain.
+a **double-clickable Mac app (.dmg)** with guided setup — no terminal at any
+step — is next. Everything runs on your own Mac either way, because DoorDash
+sign-in lives in your keychain.
 
 ```
 you › Find me a high-protein dinner under $25 that can arrive within 45
@@ -68,19 +73,32 @@ ending 1234. Suggested Dasher tip is $3.50 — that, another amount, or none?
 ### 2. Install Peckish
 
 ```sh
+npm install -g peckish
+```
+
+That's it — you now have three commands: `peckish` (terminal chat),
+`peckish-web` (web app), and `peckish-mcp` (MCP server).
+
+<details>
+<summary>Or install from source (contributors)</summary>
+
+```sh
 git clone https://github.com/CydVilla/peckish.git
 cd peckish
 npm install
 npm test          # optional: 13 unit tests, no network needed
+npm run dev       # terminal chat (or: npm run web / npm run mcp)
 ```
+
+</details>
 
 ### 3. Run it — terminal or web
 
 ```sh
 export ANTHROPIC_API_KEY=sk-ant-…   # from console.anthropic.com
 
-npm run dev     # terminal chat
-npm run web     # web app → open http://localhost:4747
+peckish         # terminal chat
+peckish-web     # web app → open http://localhost:4747
 ```
 
 On boot Peckish verifies your DoorDash sign-in, shows your default delivery
@@ -89,23 +107,21 @@ address, and flags any open carts you forgot about. If sign-in expired, run
 
 ### 4. Or run it inside Claude Desktop (no API key)
 
-```sh
-npm run build
-```
-
-Add to `~/Library/Application Support/Claude/claude_desktop_config.json`
-(replace `YOU`):
+Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
 
 ```json
 {
   "mcpServers": {
     "peckish": {
-      "command": "node",
-      "args": ["/Users/YOU/peckish/dist/mcp.js"]
+      "command": "peckish-mcp"
     }
   }
 }
 ```
+
+If Claude Desktop can't find the command, use the absolute path from
+`which peckish-mcp` instead (Desktop apps don't always inherit your shell
+PATH).
 
 Restart Claude Desktop and ask it to find you dinner. Order confirmation
 appears as a native dialog; clients that can't render dialogs can browse and
@@ -151,7 +167,7 @@ the client chooses and pays for the model.)
 | `DoorDash sign-in is missing or expired` | Run `dd-cli login` in a terminal, restart Peckish |
 | `Anthropic authentication failed` | `export ANTHROPIC_API_KEY=…` in the same shell, restart |
 | `dd-cli binary not found` | Install dd-cli (step 1) or set `DD_CLI_PATH=/path/to/dd-cli` |
-| Web app port in use | `PECKISH_PORT=5757 npm run web` |
+| Web app port in use | `PECKISH_PORT=5757 peckish-web` |
 | A turn ran away | Ctrl+C (terminal) / Stop (web) — history rolls back cleanly |
 
 Env vars: `DD_AGENT_MODEL` (default `claude-sonnet-5`), `DD_AGENT_EFFORT`
