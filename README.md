@@ -28,10 +28,11 @@ Install in one line — no git clone:
 npm install -g peckish
 ```
 
-**Roadmap** (watch [Releases](https://github.com/CydVilla/peckish/releases)):
-a **double-clickable Mac app (.dmg)** with guided setup — no terminal at any
-step — is next. Everything runs on your own Mac either way, because DoorDash
-sign-in lives in your keychain.
+**Prefer an app?** Download the
+[Mac app (.dmg)](https://github.com/CydVilla/peckish/releases/latest) —
+guided setup, no terminal at any step. See [Mac app](#mac-app) below.
+Everything runs on your own Mac either way, because DoorDash sign-in lives
+in your keychain.
 
 ```
 you › Find me a high-protein dinner under $25 that can arrive within 45
@@ -175,6 +176,38 @@ Env vars: `DD_AGENT_MODEL` (default `claude-sonnet-5`), `DD_AGENT_EFFORT`
 
 ---
 
+## Mac app
+
+A double-clickable app for people who never want to see a terminal:
+download `Peckish-x.y.z-arm64.dmg` from
+[Releases](https://github.com/CydVilla/peckish/releases/latest), drag
+**Peckish** to Applications, and open it.
+
+**First launch (Gatekeeper):** the app isn't code-signed yet, so macOS will
+refuse a plain double-click the first time. **Right-click the app →
+"Open" → "Open"** (or approve it under System Settings → Privacy & Security).
+This is only needed once.
+
+First-run setup happens in the app — three buttons, no terminal:
+
+1. **DoorDash CLI** — one-click guided install (downloads the official
+   release, verifies its SHA256 checksum before running anything). If you
+   don't have dd-cli access yet, there's a waitlist link.
+2. **Sign in to DoorDash** — opens your browser; the app detects when
+   you're done. Your sign-in lives in the macOS keychain.
+3. **Anthropic API key** — paste it once; it's stored encrypted with
+   Electron `safeStorage` (keychain-backed), never in plain text.
+
+Then **Open Peckish** — same web app, same order-confirmation modal, same
+safety gates; the app is just a shell that runs the local server for you on
+a random localhost-only port. Requires Apple Silicon; Node.js is **not**
+required (the app bundles its own runtime).
+
+Building it yourself: `cd desktop && npm install && npm run dist` →
+`desktop/dist/Peckish-*.dmg`.
+
+---
+
 ## What it does
 
 - **Search → menus → cart → preview → confirm → submit**, with the real
@@ -249,6 +282,7 @@ Also on every surface:
 | `src/costs.ts` / `src/logger.ts` | Cost accounting · JSONL audit log |
 | `src/prefs.ts` | Preference persistence (`~/.peckish/`) |
 | `tests/unit.test.ts` | 13 unit tests (`npm test`), no network needed |
+| `desktop/` | Electron shell for the Mac app (.dmg): onboarding + server launcher, no agent logic |
 
 ## Notes & limitations
 
