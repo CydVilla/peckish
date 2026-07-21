@@ -32,7 +32,7 @@ const MAX_BUFFER = 32 * 1024 * 1024; // menus can be large
 /** Keys that carry UI-rendering or model-steering content we must drop. */
 const STRIPPED_KEYS = new Set(["widget_type", "assistant_instructions"]);
 
-function stripUiFields(value: unknown): unknown {
+export function stripUiFields(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(stripUiFields);
   if (value && typeof value === "object") {
     const out: Record<string, unknown> = {};
@@ -93,7 +93,7 @@ function execDd(args: string[]): Promise<{ stdout: string; stderr: string }> {
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /** Errors observed to be transient backend/CLI hiccups worth one retry. */
-function isTransient(err: unknown): boolean {
+export function isTransient(err: unknown): boolean {
   if (!(err instanceof DdCliError)) return false;
   const text = `${err.message} ${err.detail ?? ""}`;
   if (/sign-in is missing|binary not found/i.test(text)) return false;
@@ -184,4 +184,24 @@ export async function listAddresses(): Promise<SavedAddress[]> {
 export async function getDefaultAddress(): Promise<SavedAddress | null> {
   const addresses = await listAddresses();
   return addresses.find((a) => a.is_default) ?? null;
+}
+
+/** One-line summary of open carts for the session context (best-effort). */
+export async function openCartsLine(): Promise<string> {
+  try {
+    const res = await ddJson(["cart", "list"], { retryOnce: true });
+    const carts = (res.carts as Array<Record<string, unknown>>) ?? [];
+    if (!carts.length) return "none";
+    return carts
+      .map((c) => {
+        const updated =
+          typeof c.updated_at === "number"
+            ? `updated ${new Date(c.updated_at).toISOString().slice(0, 10)}`
+            : "age unknown";
+        return `${c.store_name ?? c.store_id} — ${c.items_count ?? "?"} item(s), ${updated} (cart_uuid ${c.cart_uuid})`;
+      })
+      .join("; ");
+  } catch {
+    return "unknown";
+  }
 }

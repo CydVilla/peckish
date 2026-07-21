@@ -5,18 +5,32 @@
  *   $ npm run dev
  *   you › Find me a high-protein dinner under $25 that can arrive within
  *         45 minutes. Avoid mushrooms and excessive fees.
+ *
+ * Ctrl+C stops the current turn (history rolls back); Ctrl+C at the prompt exits.
  */
 import { createInterface } from "node:readline";
 import Anthropic from "@anthropic-ai/sdk";
-import { runTurn, buildSessionContext, MODEL } from "./agent.js";
-import { getDefaultAddress, DdCliError, resolveDdCliPath } from "./ddcli.js";
+import {
+  runTurn,
+  buildSessionContext,
+  MODEL,
+  EFFORT,
+  TurnAborted,
+  getSessionUsage,
+  resetSessionUsage,
+  type ChatMessage,
+  type TurnUsageReport,
+} from "./agent.js";
+import { getDefaultAddress, openCartsLine, DdCliError, resolveDdCliPath } from "./ddcli.js";
 import { registerTerminalProviders } from "./confirm.js";
 import { listPreferences, preferencesFilePath } from "./prefs.js";
+import { formatCost } from "./costs.js";
 
 const dim = (s: string) => `\x1b[2m${s}\x1b[0m`;
 const bold = (s: string) => `\x1b[1m${s}\x1b[0m`;
 const red = (s: string) => `\x1b[31m${s}\x1b[0m`;
 const green = (s: string) => `\x1b[32m${s}\x1b[0m`;
+const amber = (s: string) => `\x1b[33m${s}\x1b[0m`;
 
 function nowStamp(): string {
   return new Date().toLocaleString("en-US", {
@@ -46,27 +60,47 @@ async function preflight(): Promise<string | null> {
 }
 
 async function main(): Promise<void> {
-  console.log(bold("\n🍜 Peckish") + dim(`  ·  ${MODEL}  ·  dd-cli @ ${resolveDdCliPath()}`));
+  console.log(
+    bold("\n🍜 Peckish") +
+      dim(`  ·  ${MODEL} @ ${EFFORT} effort  ·  dd-cli @ ${resolveDdCliPath()}`),
+  );
   process.stdout.write(dim("checking DoorDash sign-in… "));
-  const addressLine = await preflight();
+  const [addressLine, cartsLine] = await Promise.all([preflight(), openCartsLine()]);
   console.log(green("ok"));
   if (addressLine) console.log(dim(`delivering to: ${addressLine}`));
+  if (cartsLine !== "none" && cartsLine !== "unknown")
+    console.log(dim(`open carts: ${cartsLine}`));
   const prefs = listPreferences();
-  if (prefs.length) console.log(dim(`preferences loaded: ${prefs.length} (${preferencesFilePath()})`));
+  if (prefs.length)
+    console.log(dim(`preferences loaded: ${prefs.length} (${preferencesFilePath()})`));
   console.log(
     dim(
       'try: "Find me a high-protein dinner under $25 that can arrive within 45 minutes. Avoid mushrooms and excessive fees."\n' +
-        "commands: /prefs  /reset  /quit\n",
+        "commands: /prefs  /cost  /reset  /quit   ·   Ctrl+C stops a running turn   ·   audit log: ~/.peckish/logs/\n",
     ),
   );
 
   const rl = createInterface({ input: process.stdin, output: process.stdout });
   registerTerminalProviders(rl);
 
-  const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-  const sessionContext = buildSessionContext({ defaultAddressLine: addressLine, timezone });
+  let currentTurn: AbortController | null = null;
+  rl.on("SIGINT", () => {
+    if (currentTurn) {
+      currentTurn.abort();
+      process.stdout.write(dim("  (stopping…)"));
+    } else {
+      rl.close();
+    }
+  });
 
-  let history: Anthropic.MessageParam[] = [];
+  const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const sessionContext = buildSessionContext({
+    defaultAddressLine: addressLine,
+    timezone,
+    openCartsLine: cartsLine,
+  });
+
+  let history: ChatMessage[] = [];
   let firstTurn = true;
 
   const ask = (): void => {
@@ -80,12 +114,22 @@ async function main(): Promise<void> {
       if (input === "/reset") {
         history = [];
         firstTurn = true;
-        console.log(dim("conversation cleared"));
+        resetSessionUsage();
+        console.log(dim("conversation + cost meter cleared"));
         return ask();
       }
       if (input === "/prefs") {
         const notes = listPreferences();
         console.log(notes.length ? notes.map((n) => `  - ${n}`).join("\n") : dim("  (none saved)"));
+        return ask();
+      }
+      if (input === "/cost") {
+        const { usage, costUsd } = getSessionUsage();
+        console.log(
+          dim(
+            `session ${formatCost(costUsd)}  ·  in ${usage.input_tokens.toLocaleString()} / cached ${usage.cache_read_input_tokens.toLocaleString()} / out ${usage.output_tokens.toLocaleString()} tokens  ·  ${MODEL}`,
+          ),
+        );
         return ask();
       }
 
@@ -105,31 +149,53 @@ async function main(): Promise<void> {
         }
       };
 
+      currentTurn = new AbortController();
+      let usageReport: TurnUsageReport | null = null;
       try {
-        await runTurn(history, {
-          onThinking: () => {
-            freshLine();
-            process.stdout.write(dim("· thinking…\n"));
+        await runTurn(
+          history,
+          {
+            onThinking: () => {
+              freshLine();
+              process.stdout.write(dim("· thinking…\n"));
+            },
+            onText: (delta) => {
+              if (!midText) process.stdout.write("\n");
+              midText = true;
+              process.stdout.write(delta);
+            },
+            onToolStart: (name, input) => {
+              freshLine();
+              const preview = JSON.stringify(input);
+              process.stdout.write(
+                dim(`⚙ ${name} ${preview.length > 110 ? preview.slice(0, 110) + "…" : preview}`),
+              );
+            },
+            onToolEnd: (_name, ok, ms) => {
+              process.stdout.write(dim(`  ${ok ? "✓" : "✗"} ${(ms / 1000).toFixed(1)}s\n`));
+            },
+            onNotice: (message) => {
+              freshLine();
+              console.log(amber(`⚠ ${message}`));
+            },
+            onTurnUsage: (report) => {
+              usageReport = report;
+            },
           },
-          onText: (delta) => {
-            if (!midText) process.stdout.write("\n");
-            midText = true;
-            process.stdout.write(delta);
-          },
-          onToolStart: (name, input) => {
-            freshLine();
-            const preview = JSON.stringify(input);
-            process.stdout.write(
-              dim(`⚙ ${name} ${preview.length > 110 ? preview.slice(0, 110) + "…" : preview}`),
-            );
-          },
-          onToolEnd: (_name, ok, ms) => {
-            process.stdout.write(dim(`  ${ok ? "✓" : "✗"} ${(ms / 1000).toFixed(1)}s\n`));
-          },
-        });
+          { signal: currentTurn.signal },
+        );
+        freshLine();
+        if (usageReport) {
+          const r: TurnUsageReport = usageReport;
+          console.log(
+            dim(`${formatCost(r.turnCostUsd)} turn · ${formatCost(r.sessionCostUsd)} session`),
+          );
+        }
       } catch (err) {
         freshLine();
-        if (
+        if (err instanceof TurnAborted) {
+          console.log(amber("✗ stopped — that turn was rolled back; ask again anytime"));
+        } else if (
           err instanceof Anthropic.AuthenticationError ||
           /could not resolve authentication/i.test(err instanceof Error ? err.message : "")
         ) {
@@ -137,13 +203,16 @@ async function main(): Promise<void> {
             red("✗ Anthropic authentication failed.") +
               "\n  Set ANTHROPIC_API_KEY in your environment (or sign in with `ant auth login`).",
           );
+          while (history.length && history[history.length - 1].role === "user") history.pop();
         } else if (err instanceof Anthropic.APIError) {
           console.error(red(`✗ Claude API error ${err.status ?? ""}: ${err.message}`));
+          while (history.length && history[history.length - 1].role === "user") history.pop();
         } else {
           console.error(red(`✗ ${err instanceof Error ? err.message : String(err)}`));
+          while (history.length && history[history.length - 1].role === "user") history.pop();
         }
-        // Drop the failed turn's trailing user message so history stays valid.
-        while (history.length && history[history.length - 1].role === "user") history.pop();
+      } finally {
+        currentTurn = null;
       }
       freshLine();
       ask();
@@ -151,7 +220,8 @@ async function main(): Promise<void> {
   };
 
   rl.on("close", () => {
-    console.log(dim("\nbye 👋"));
+    const { costUsd } = getSessionUsage();
+    console.log(dim(`\nbye 👋  (session ${formatCost(costUsd)})`));
     process.exit(0);
   });
   ask();

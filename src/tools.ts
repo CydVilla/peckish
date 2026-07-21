@@ -35,7 +35,7 @@ interface MenuItemWire {
   unavailability_reason?: string;
 }
 
-function trimMenuItem(it: MenuItemWire) {
+export function trimMenuItem(it: MenuItemWire) {
   return {
     item_id: it.item_id,
     name: it.name,
@@ -476,7 +476,7 @@ const num = (description: string) => ({ type: "number" as const, description });
 const int = (description: string) => ({ type: "integer" as const, description });
 const bool = (description: string) => ({ type: "boolean" as const, description });
 
-export const tools: Anthropic.Tool[] = [
+const RAW_TOOLS: Anthropic.Tool[] = [
   {
     name: "list_addresses",
     description:
@@ -579,8 +579,30 @@ export const tools: Anthropic.Tool[] = [
               quantity: num("Quantity (integer for count items)"),
               nested_options: {
                 type: "array",
-                description: "Selected customization option objects {id, name, quantity, options?}",
-                items: { type: "object" },
+                description:
+                  "Selected customization options. Each entry may carry its own options[] for combo sub-choices (max depth the CLI uses).",
+                items: {
+                  type: "object",
+                  properties: {
+                    id: str("option_id from item details"),
+                    name: str("Option display name"),
+                    quantity: num("Usually 1"),
+                    options: {
+                      type: "array",
+                      description: "Sub-choices for combo options",
+                      items: {
+                        type: "object",
+                        properties: {
+                          id: str("Sub-option id"),
+                          name: str("Sub-option name"),
+                          quantity: num("Usually 1"),
+                        },
+                        required: ["id", "name", "quantity"],
+                      },
+                    },
+                  },
+                  required: ["id", "name", "quantity"],
+                },
               },
             },
             required: ["item_id", "item_name", "quantity"],
@@ -858,6 +880,34 @@ export const tools: Anthropic.Tool[] = [
     },
   },
 ];
+
+// ---------------------------------------------------------------------------
+// Strict mode: the API then guarantees tool inputs validate against the schema
+// (no malformed-argument class at all). Strict requires additionalProperties:
+// false and a required[] on every object node — applied mechanically here so
+// no hand-written schema can drift out of compliance.
+// ---------------------------------------------------------------------------
+
+export function strictifySchema<T>(node: T): T {
+  if (Array.isArray(node)) return node.map(strictifySchema) as T;
+  if (node && typeof node === "object") {
+    const obj = { ...(node as Record<string, unknown>) };
+    for (const [k, v] of Object.entries(obj)) obj[k] = strictifySchema(v);
+    if (obj.type === "object") {
+      obj.additionalProperties = false;
+      if (!Array.isArray(obj.required)) obj.required = [];
+      if (!obj.properties) obj.properties = {};
+    }
+    return obj as T;
+  }
+  return node;
+}
+
+export const tools: Anthropic.Tool[] = RAW_TOOLS.map((t) => ({
+  ...t,
+  strict: true,
+  input_schema: strictifySchema(t.input_schema),
+}));
 
 export function preferencesForPrompt(): string {
   const notes = listPreferences();

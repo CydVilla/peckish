@@ -61,6 +61,9 @@
   }
   .msg-assistant ul { margin: 6px 0; padding-left: 22px; }
   .msg-error { color: var(--bad); padding: 8px 2px; }
+  .msg-notice { color: #f5c451; padding: 6px 2px; font-size: 0.88rem; }
+  .msg-stopped { color: var(--muted); font-style: italic; padding: 6px 2px; }
+  #send.stop { background: var(--panel-2); color: var(--bad); border: 1px solid var(--bad); }
 
   .toolchip {
     display: inline-flex; align-items: center; gap: 7px;
@@ -155,6 +158,7 @@
     <span class="logo">🍜 Peckish</span>
     <span class="chip" id="chip-address">…</span>
     <span class="chip" id="chip-model">…</span>
+    <span class="chip" id="chip-cost" title="Approximate Claude API spend this session">…</span>
     <span class="spacer"></span>
     <button id="reset">New chat</button>
   </header>
@@ -241,8 +245,9 @@ function addUserMsg(text) {
 
 function setBusy(b) {
   busy = b;
-  send.disabled = b;
-  input.placeholder = b ? "Peckish is working…" : "What are you hungry for?";
+  send.textContent = b ? "Stop" : "Send";
+  send.classList.toggle("stop", b);
+  input.placeholder = b ? "Peckish is working… (Stop to cancel)" : "What are you hungry for?";
 }
 
 // ── result cards ──────────────────────────────────────────────────────────
@@ -333,6 +338,20 @@ function connect() {
         feed.appendChild(el("div", "msg-error", esc(e.message)));
         scrollDown();
         break;
+      case "notice":
+        clearThinking();
+        feed.appendChild(el("div", "msg-notice", "⚠ " + esc(e.message)));
+        scrollDown();
+        break;
+      case "aborted":
+        clearThinking();
+        runningTools.length = 0;
+        feed.appendChild(el("div", "msg-stopped", "⏹ stopped — that request was rolled back"));
+        scrollDown();
+        break;
+      case "usage":
+        document.getElementById("chip-cost").textContent = e.session_cost + " session";
+        break;
       case "turn_done":
         clearThinking();
         currentText = null;
@@ -391,7 +410,10 @@ async function submit() {
     feed.appendChild(el("div", "msg-error", esc(body.error || "request failed")));
   }
 }
-send.onclick = submit;
+send.onclick = () => {
+  if (busy) { fetch("/api/abort", { method: "POST" }); return; }
+  submit();
+};
 input.addEventListener("keydown", (ev) => {
   if (ev.key === "Enter" && !ev.shiftKey) { ev.preventDefault(); submit(); }
 });
@@ -408,7 +430,8 @@ document.getElementById("reset").onclick = async () => {
 // ── header state ──────────────────────────────────────────────────────────
 fetch("/api/state").then((r) => r.json()).then((s) => {
   document.getElementById("chip-address").textContent = s.address || "no default address";
-  document.getElementById("chip-model").textContent = s.model;
+  document.getElementById("chip-model").textContent = s.model + " @ " + (s.effort || "medium");
+  document.getElementById("chip-cost").textContent = (s.session_cost || "<$0.01") + " session";
   if (s.busy) setBusy(true);
 });
 </script>
