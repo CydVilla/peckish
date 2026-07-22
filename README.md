@@ -311,6 +311,46 @@ Also on every surface:
 | `extension/` | Claude Desktop extension (`.mcpb`): manifest + vendored server. `node build-manifest.mjs && mcpb pack . peckish.mcpb` |
 | `server.json` | MCP Registry metadata (`io.github.cydvilla/peckish`) |
 
+## Releasing
+
+Everything ships from one tag. `.github/workflows/release.yml` publishes both
+npm packages, registers the MCP Registry entry, builds the `.mcpb` and the
+`.dmg`, and attaches both to the GitHub release:
+
+```sh
+npm version patch          # or edit the versions by hand
+git push && git push --tags
+```
+
+Every publish step is **skip-if-already-published**, so re-running a tag after a
+failure is safe. `.github/workflows/ci.yml` runs typecheck, tests, a metadata
+consistency check, and a real MCP handshake on every push.
+
+`scripts/check-consistency.mjs` guards the metadata that spans files and drifts
+silently — the registry namespace casing, matching `server.json` name and
+`mcpName`, the 100-character registry description cap, and the extension's
+advertised tool list. Run it locally before tagging.
+
+<details>
+<summary>One-time setup for the automation</summary>
+
+**npm** — either configure
+[trusted publishing](https://docs.npmjs.com/trusted-publishers) on npmjs.com for
+both `peckish` and `peckish-mcp` (provider: GitHub Actions, repo
+`CydVilla/peckish`, workflow `release.yml`) so no secret is needed, **or** add an
+`NPM_TOKEN` repository secret using a granular access token with "bypass 2FA"
+enabled.
+
+**MCP Registry** — nothing to configure. The workflow authenticates with
+`mcp-publisher login github-oidc`, and GitHub's OIDC token proves the repo owner
+is `CydVilla`, which grants the `io.github.CydVilla/*` namespace.
+
+**Mac app signing** — the `.dmg` is built unsigned. Notarized builds would need
+an Apple Developer ID plus `CSC_LINK`/`CSC_KEY_PASSWORD` and notarization
+secrets.
+
+</details>
+
 ## Notes & limitations
 
 - Local-first by design: hosted delivery (SMS bots, voice) would require
