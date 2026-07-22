@@ -11,7 +11,7 @@
     "dist": "electron-builder --mac dmg --arm64"
   },
   "dependencies": {
-    "peckish": "^0.2.1"
+    "peckish": "^0.2.2"
   },
   "devDependencies": {
     "electron": "^37.2.0",
