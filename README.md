@@ -145,7 +145,7 @@ inherit your shell `PATH`.
 </details>
 
 Peckish is also listed in the [MCP Registry](https://registry.modelcontextprotocol.io)
-as `io.github.cydvilla/peckish`, so clients that browse the registry can find
+as `io.github.CydVilla/peckish`, so clients that browse the registry can find
 it directly.
 
 Restart Claude Desktop and ask it to find you dinner. Order confirmation
