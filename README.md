@@ -11,7 +11,7 @@ One tool layer, three surfaces:
 |---|---|---|
 | **Terminal chat** | `peckish` | Living in the terminal |
 | **Local web app** | `peckish-web` → http://localhost:4747 | Consumer-friendly UI: store cards, live quote, Stop button, order modal |
-| **MCP server** | `peckish-mcp` via an MCP client | Claude Desktop / Claude Code users — **no API key needed**; your Claude subscription powers the model |
+| **MCP server** | `claude mcp add peckish -- npx -y peckish-mcp`, or the double-click [`.mcpb`](https://github.com/CydVilla/peckish/releases/latest) | Claude Desktop / Claude Code users — **no API key needed**; your Claude subscription powers the model |
 
 **Which one is for me?**
 
@@ -106,7 +106,24 @@ On boot Peckish verifies your DoorDash sign-in, shows your default delivery
 address, and flags any open carts you forgot about. If sign-in expired, run
 `dd-cli login` again and restart.
 
-### 4. Or run it inside Claude Desktop (no API key)
+### 4. Or run it inside Claude — no API key
+
+Claude itself becomes the ordering agent, and your Claude subscription pays for
+the model. Pick whichever fits your client:
+
+**Claude Code** — one line:
+
+```sh
+claude mcp add peckish -- npx -y peckish-mcp
+```
+
+**Claude Desktop** — download `peckish-0.2.2.mcpb` from
+[Releases](https://github.com/CydVilla/peckish/releases/latest) and
+double-click it. Claude Desktop installs it like a browser extension: no
+terminal, no Node install, no JSON editing.
+
+<details>
+<summary>Or configure Claude Desktop by hand</summary>
 
 Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
 
@@ -114,15 +131,22 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
 {
   "mcpServers": {
     "peckish": {
-      "command": "peckish-mcp"
+      "command": "npx",
+      "args": ["-y", "peckish-mcp"]
     }
   }
 }
 ```
 
-If Claude Desktop can't find the command, use the absolute path from
-`which peckish-mcp` instead (Desktop apps don't always inherit your shell
-PATH).
+If dd-cli isn't at `~/.local/bin/dd-cli`, add
+`"env": { "DD_CLI_PATH": "/your/path/to/dd-cli" }` — desktop apps don't
+inherit your shell `PATH`.
+
+</details>
+
+Peckish is also listed in the [MCP Registry](https://registry.modelcontextprotocol.io)
+as `io.github.cydvilla/peckish`, so clients that browse the registry can find
+it directly.
 
 Restart Claude Desktop and ask it to find you dinner. Order confirmation
 appears as a native dialog; clients that can't render dialogs can browse and
@@ -283,6 +307,9 @@ Also on every surface:
 | `src/prefs.ts` | Preference persistence (`~/.peckish/`) |
 | `tests/unit.test.ts` | 13 unit tests (`npm test`), no network needed |
 | `desktop/` | Electron shell for the Mac app (.dmg): onboarding + server launcher, no agent logic |
+| `packages/mcp/` | The `peckish-mcp` npm package — a launcher so `npx -y peckish-mcp` starts the MCP server |
+| `extension/` | Claude Desktop extension (`.mcpb`): manifest + vendored server. `node build-manifest.mjs && mcpb pack . peckish.mcpb` |
+| `server.json` | MCP Registry metadata (`io.github.cydvilla/peckish`) |
 
 ## Notes & limitations
 

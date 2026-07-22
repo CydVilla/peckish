@@ -1,5 +1,9 @@
 node_modules/
 dist/
+*.mcpb
+*.tgz
+# regenerated at bundle-build time from the published peckish package
+extension/package-lock.json
 .env
 *.log
 .DS_Store
