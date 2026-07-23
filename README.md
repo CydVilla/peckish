@@ -22,6 +22,15 @@ One tool layer, three surfaces:
   no separate chat window — Claude itself becomes your ordering agent, and
   order confirmation appears as a native dialog.
 
+<p align="center">
+  <img src="docs/demo.gif" alt="Peckish finding a dinner under $25: tool calls run, a recommendation streams in with the fee-included total, and an order-confirmation dialog asks for approval before anything is placed." width="820">
+  <br>
+  <em><sub>Scripted demo of the web app — store, prices and card are fictional;
+  the interface and the approval gate are the real ones.</sub></em>
+</p>
+
+**[peckish on the web →](https://cydvilla.github.io/peckish/)**
+
 Install in one line — no git clone:
 
 ```sh
