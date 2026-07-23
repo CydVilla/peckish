@@ -1,6 +1,6 @@
 {
   "name": "peckish",
-  "version": "0.2.2",
+  "version": "0.3.0",
   "description": "Peckish — AI ordering agent for DoorDash. Terminal chat, local web app, and MCP server over dd-cli + Claude.",
   "type": "module",
   "license": "MIT",

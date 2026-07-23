@@ -2,7 +2,7 @@
   "manifest_version": "0.3",
   "name": "peckish",
   "display_name": "Peckish — DoorDash ordering",
-  "version": "0.2.2",
+  "version": "0.3.0",
   "description": "Order food on DoorDash from Claude — you approve every order.",
   "long_description": "Peckish gives Claude real DoorDash ordering: it searches stores, compares true fee-included totals from live quotes, builds carts, scans promos, and handles groceries, pickup, scheduled delivery, reorders and spend questions.\n\nPlacing an order always requires an approval dialog you answer yourself — Claude must first show the itemized quote, confirm the Dasher tip, and name the card being charged. Submission never auto-retries, and every tool call and confirmation is logged to ~/.peckish/logs/.\n\nRequires a Mac with Apple Silicon and DoorDash's dd-cli (waitlist-gated), signed in via `dd-cli login`. No Anthropic API key needed — your Claude subscription powers the model.",
   "author": {

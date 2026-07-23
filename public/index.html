@@ -146,12 +146,20 @@
   }
   #send:disabled { opacity: 0.45; cursor: default; }
   .suggestion {
-    display: block; margin: 60px auto 8px; max-width: 560px; text-align: center;
+    display: flex; align-items: center; gap: 12px;
+    margin: 54px auto 8px; max-width: 580px; min-height: 58px; text-align: left;
     color: var(--muted); background: var(--panel); border: 1px dashed var(--border);
-    border-radius: var(--radius); padding: 16px 18px; cursor: pointer; font-size: 0.88rem;
-    line-height: 1.5;
+    border-radius: var(--radius); padding: 14px 18px; cursor: pointer; font-size: 0.88rem;
+    line-height: 1.5; transition: border-color .15s, color .15s;
   }
   .suggestion:hover { border-color: var(--accent); color: var(--text); }
+  .suggestion .spark { flex: none; font-size: 1.1rem; filter: grayscale(0.2); }
+  .suggestion .text { flex: 1; transition: opacity .26s ease; }
+  .suggestion .go {
+    flex: none; font-size: 0.72rem; color: var(--muted); border: 1px solid var(--border);
+    border-radius: 999px; padding: 2px 9px; opacity: 0; transition: opacity .15s;
+  }
+  .suggestion:hover .go { opacity: 1; color: var(--accent); border-color: var(--accent); }
   .hello { text-align: center; margin-top: 9vh; }
   .hello .big { font-size: 2.1rem; font-weight: 800; letter-spacing: -0.03em; }
   .hello .sub { color: var(--muted); margin-top: 6px; }
@@ -193,7 +201,11 @@
     <div class="hello" id="hello">
       <div class="big">Feeling peckish?</div>
       <div class="sub">Just ask. I'll search, compare fees, build the cart — you approve the order.</div>
-      <div class="suggestion" id="suggestion">Find me a high-protein dinner under $25 that can arrive within 45 minutes. Avoid mushrooms and excessive fees.</div>
+      <div class="suggestion" id="suggestion" title="Click to try this — or just type your own">
+        <span class="spark">🍜</span>
+        <span class="text" id="suggestion-text">Find me a high-protein dinner under $25 that can arrive within 45 minutes. Avoid mushrooms and excessive fees.</span>
+        <span class="go">try&nbsp;↵</span>
+      </div>
     </div>
   </div></div>
 
@@ -443,8 +455,39 @@ send.onclick = () => {
 input.addEventListener("keydown", (ev) => {
   if (ev.key === "Enter" && !ev.shiftKey) { ev.preventDefault(); submit(); }
 });
-document.getElementById("suggestion").onclick = function () {
-  input.value = this.textContent.trim();
+// ── rotating suggestions ──────────────────────────────────────────────────
+const SUGGESTIONS = [
+  "Find me a high-protein dinner under $25 that can arrive within 45 minutes. Avoid mushrooms and excessive fees.",
+  "I'm hungover. Something greasy, cheap, and here in 30 minutes.",
+  "Compare the real totals at the two top-rated taco spots near me — fees included.",
+  "Reorder my usual, but tell me if anything got silently dropped.",
+  "Cheapest way to feed 4 people tonight. Pickup if it dodges the delivery fee.",
+  "What did I spend on delivery last month? Break out the fees and tips honestly.",
+  "Late-night sushi that won't wreck me on service fees.",
+  "Grab milk, eggs, and a pound of ground beef from the closest grocery store.",
+  "Vegan comfort food under $20 — and never any mushrooms.",
+  "Is that ramen place actually any good? If so, build me a cart.",
+];
+const suggestionBox = document.getElementById("suggestion");
+const suggestionText = document.getElementById("suggestion-text");
+let suggestionIdx = 0;
+let suggestionTimer = null;
+let suggestionPaused = false;
+
+function rotateSuggestion() {
+  if (suggestionPaused || !hello || hello.style.display === "none") return;
+  suggestionText.style.opacity = "0";
+  setTimeout(() => {
+    suggestionIdx = (suggestionIdx + 1) % SUGGESTIONS.length;
+    suggestionText.textContent = SUGGESTIONS[suggestionIdx];
+    suggestionText.style.opacity = "1";
+  }, 260);
+}
+suggestionTimer = setInterval(rotateSuggestion, 4200);
+suggestionBox.addEventListener("mouseenter", () => (suggestionPaused = true));
+suggestionBox.addEventListener("mouseleave", () => (suggestionPaused = false));
+suggestionBox.onclick = function () {
+  input.value = SUGGESTIONS[suggestionIdx];
   submit();
 };
 document.getElementById("reset").onclick = async () => {

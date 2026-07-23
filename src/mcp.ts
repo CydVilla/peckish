@@ -61,7 +61,7 @@ const INSTRUCTIONS = `Peckish orders food on DoorDash for the signed-in user. Op
 - No popularity data exists; distances are meters (÷1609 for miles); is_link_out stores can't be ordered here; age-restricted carts need get_checkout_url.`;
 
 const server = new Server(
-  { name: "peckish", version: "0.2.2" },
+  { name: "peckish", version: "0.3.0" },
   { capabilities: { tools: {} }, instructions: INSTRUCTIONS },
 );
 

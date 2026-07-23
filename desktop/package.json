@@ -1,6 +1,6 @@
 {
   "name": "peckish-desktop",
-  "version": "0.2.2",
+  "version": "0.3.0",
   "description": "Peckish for Mac — double-clickable shell around the Peckish web app (AI DoorDash ordering agent).",
   "private": true,
   "main": "main.js",
@@ -11,7 +11,7 @@
     "dist": "electron-builder --mac dmg --arm64"
   },
   "dependencies": {
-    "peckish": "^0.2.2"
+    "peckish": "^0.3.0"
   },
   "devDependencies": {
     "electron": "^37.2.0",

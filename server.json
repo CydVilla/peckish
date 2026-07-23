@@ -3,7 +3,7 @@
   "name": "io.github.CydVilla/peckish",
   "title": "Peckish — DoorDash ordering",
   "description": "Order food on DoorDash — compare real fee-included totals; you approve every order.",
-  "version": "0.2.3",
+  "version": "0.3.0",
   "repository": {
     "url": "https://github.com/CydVilla/peckish",
     "source": "github"
@@ -13,7 +13,7 @@
     {
       "registryType": "npm",
       "identifier": "peckish-mcp",
-      "version": "0.2.3",
+      "version": "0.3.0",
       "transport": {
         "type": "stdio"
       },

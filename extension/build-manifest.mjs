@@ -30,7 +30,7 @@ const manifest = {
   manifest_version: "0.3",
   name: "peckish",
   display_name: "Peckish — DoorDash ordering",
-  version: "0.2.2",
+  version: "0.3.0",
   description: "Order food on DoorDash from Claude — you approve every order.",
   long_description:
     "Peckish gives Claude real DoorDash ordering: it searches stores, compares " +
