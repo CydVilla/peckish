@@ -8,3 +8,4 @@ extension/package-lock.json
 *.log
 .DS_Store
 HANDOFF.md
+marketing/
