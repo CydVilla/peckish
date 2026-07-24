@@ -56,9 +56,11 @@ jobs:
           echo "peckish=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
           echo "peckish_mcp=$(node -p "require('./packages/mcp/package.json').version")" >> "$GITHUB_OUTPUT"
 
+      # No NODE_AUTH_TOKEN: with a trusted publisher configured on npmjs.com and
+      # id-token:write above, npm (>= 11.5.1) authenticates over OIDC and mints
+      # provenance automatically. A token env would make npm try token auth
+      # instead.
       - name: Publish peckish
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           V="${{ steps.versions.outputs.peckish }}"
           if npm view "peckish@$V" version >/dev/null 2>&1; then
@@ -69,8 +71,6 @@ jobs:
 
       - name: Publish peckish-mcp
         working-directory: packages/mcp
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           V="${{ steps.versions.outputs.peckish_mcp }}"
           if npm view "peckish-mcp@$V" version >/dev/null 2>&1; then
