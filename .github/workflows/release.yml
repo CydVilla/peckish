@@ -189,10 +189,21 @@ jobs:
           npm install --no-audit --no-fund
           npm install "peckish@${{ needs.npm-publish.outputs.peckish_version }}" --no-audit --no-fund
 
-      # Unsigned: no Apple Developer ID configured. Users right-click → Open.
-      - name: Build dmg
+      # Ad-hoc signed (no Apple Developer ID). The helper assembles the dmg via
+      # hdiutil from a tmp-staged, signed copy so the signature is valid inside
+      # the shipped image regardless of the runner's file-tagging behavior;
+      # users still do the one-time right-click → Open.
+      - name: Build signed dmg
         working-directory: desktop
-        run: npm run dist
+        run: ./build-signed-dmg.sh
+
+      - name: Verify the shipped dmg is validly signed
+        run: |
+          DMG=$(ls desktop/dist/*.dmg)
+          hdiutil attach -nobrowse -quiet "$DMG" -mountpoint /tmp/verify-dmg
+          codesign --verify --deep --strict "/tmp/verify-dmg/Peckish.app"
+          hdiutil detach -quiet /tmp/verify-dmg
+          echo "✓ $DMG signature valid"
 
       - uses: actions/upload-artifact@v4
         with:

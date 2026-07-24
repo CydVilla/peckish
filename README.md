@@ -216,10 +216,17 @@ download `Peckish-x.y.z-arm64.dmg` from
 [Releases](https://github.com/CydVilla/peckish/releases/latest), drag
 **Peckish** to Applications, and open it.
 
-**First launch (Gatekeeper):** the app isn't code-signed yet, so macOS will
-refuse a plain double-click the first time. **Right-click the app →
-"Open" → "Open"** (or approve it under System Settings → Privacy & Security).
-This is only needed once.
+**First launch (Gatekeeper):** the app is ad-hoc signed but not notarized (no
+paid Apple Developer ID), so macOS won't open it on a plain double-click the
+first time. **Right-click the app → "Open" → "Open"** (or approve it under
+System Settings → Privacy & Security). Only needed once.
+
+> If macOS instead says **"Peckish is damaged and can't be opened"**, you have
+> a build from before this was fixed, or the download quarantine got confused.
+> Clear it once and it opens normally:
+> ```sh
+> xattr -cr /Applications/Peckish.app
+> ```
 
 First-run setup happens in the app — three buttons, no terminal:
 

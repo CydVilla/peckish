@@ -20,6 +20,7 @@
   "build": {
     "appId": "com.cydvilla.peckish",
     "productName": "Peckish",
+    "afterPack": "./afterPack.js",
     "files": [
       "main.js",
       "preload.js",
