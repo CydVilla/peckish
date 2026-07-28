@@ -31,6 +31,11 @@ One tool layer, three surfaces:
 
 **[peckish on the web →](https://cydvilla.github.io/peckish/)**
 
+**Updates:** every release ships with full notes, all artifacts, and a
+`SHA256SUMS.txt` on [Releases](https://github.com/CydVilla/peckish/releases) —
+see [CHANGELOG.md](CHANGELOG.md) for the history. Watch the repo (Releases
+only) to get notified.
+
 Install in one line — no git clone:
 
 ```sh

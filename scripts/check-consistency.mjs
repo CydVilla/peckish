@@ -78,6 +78,14 @@ check(
   `extension manifest platforms should be ["darwin"] — got ${JSON.stringify(manifest.compatibility.platforms)}`,
 );
 
+// Releases must ship with curated notes: the version being released needs its
+// own CHANGELOG section (release.yml turns it into the GitHub release body).
+const changelog = readFileSync(join(ROOT, "CHANGELOG.md"), "utf8");
+check(
+  new RegExp(`^## \\[${pkg.version.replace(/\./g, "\\.")}\\]`, "m").test(changelog),
+  `CHANGELOG.md has no "## [${pkg.version}]" section — write the release notes before bumping/releasing`,
+);
+
 if (problems.length) {
   console.error("✗ metadata consistency check failed:\n");
   for (const p of problems) console.error("  • " + p);

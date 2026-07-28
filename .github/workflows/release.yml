@@ -1,8 +1,15 @@
 name: Release
 
 # Tag a commit to ship everything:
-#   npm run build && npm test && git tag v0.2.4 && git push --tags
+#   1. Write the version's section in CHANGELOG.md (enforced — the consistency
+#      check fails the release without it; it becomes the release body)
+#   2. Bump versions everywhere (package.json, packages/mcp, desktop, extension
+#      + manifest, server.json, src/mcp.ts) — check-consistency.mjs verifies
+#   3. npm run build && npm test && git tag vX.Y.Z && git push --tags
 #
+# The release job publishes npm + MCP Registry, attaches .dmg/.mcpb +
+# SHA256SUMS.txt, and writes curated notes (CHANGELOG section + install table
+# + checksums). Tags with a hyphen (v0.5.0-rc1) publish as prereleases.
 # Every publish step is skip-if-already-published, so re-running a tag is safe.
 on:
   push:
@@ -221,18 +228,43 @@ jobs:
         with:
           path: artifacts
 
-      - name: Attach artifacts to the release
+      # Full-featured release, every time:
+      #   • body = the version's CHANGELOG section (enforced by
+      #     check-consistency.mjs) + install/upgrade table + checksums
+      #   • SHA256SUMS.txt attached so downloads are verifiable
+      #     (`shasum -a 256 -c SHA256SUMS.txt`) — we ship an unsigned dmg,
+      #     so checksums are the integrity story
+      #   • auto-generated commit notes appended below the curated body
+      #   • tags containing a hyphen (v0.5.0-rc1) publish as prereleases
+      - name: Publish release with notes + checksums
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           TAG="${GITHUB_REF#refs/tags/}"
           [ "$TAG" = "$GITHUB_REF" ] && TAG="v$(node -p "require('./package.json').version")"
+          VERSION="${TAG#v}"
+
           mapfile -t FILES < <(find artifacts -type f \( -name '*.dmg' -o -name '*.mcpb' \))
-          printf 'attaching: %s\n' "${FILES[@]}"
+          printf 'artifacts: %s\n' "${FILES[@]}"
+
+          # Checksums (basename-keyed so users can verify in their download dir)
+          mkdir -p release-staging
+          cp "${FILES[@]}" release-staging/
+          (cd release-staging && shasum -a 256 -- * > SHA256SUMS.txt && cat SHA256SUMS.txt)
+
+          node scripts/release-notes.mjs "$VERSION" release-staging/SHA256SUMS.txt > notes.md
+
+          PRERELEASE_FLAG=""
+          case "$VERSION" in *-*) PRERELEASE_FLAG="--prerelease";; esac
+
           if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" "${FILES[@]}" --clobber
+            gh release upload "$TAG" release-staging/* --clobber
+            gh release edit "$TAG" \
+              --title "Peckish $VERSION" \
+              --notes-file notes.md $PRERELEASE_FLAG
           else
-            gh release create "$TAG" "${FILES[@]}" \
-              --title "Peckish $TAG" \
-              --generate-notes
+            gh release create "$TAG" release-staging/* \
+              --title "Peckish $VERSION" \
+              --notes-file notes.md \
+              --generate-notes $PRERELEASE_FLAG
           fi
