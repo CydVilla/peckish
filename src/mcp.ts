@@ -19,7 +19,7 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import { tools, toolHandlers } from "./tools.js";
 import { setConfirmationProviders } from "./confirm.js";
-import { getDefaultAddress } from "./ddcli.js";
+import { getDefaultAddress, setCallIntent } from "./ddcli.js";
 import { listPreferences, preferencesFilePath } from "./prefs.js";
 
 const READ_ONLY = new Set([
@@ -57,6 +57,11 @@ const INSTRUCTIONS = `Peckish orders food on DoorDash for the signed-in user. Op
 - COMPARING FINALISTS: when the user cares about cost/fees or two candidates are close, build a cart at each finalist (max 3 — the one-cart limit is per store), preview each, present total + fee share + ETA with a recommendation, then delete_cart every cart the user doesn't keep and say so. Never leave stray comparison carts.
 - PROMOS & FEES: one list_promos call before presenting a store's preview is worth it — offer eligible promos (check stated minimums), never apply silently, re-preview after. Mention applied DoorDash credits. Pickup often dodges delivery fees — compare when fees bother the user and the store is close.
 - HISTORY: derive "my usual" from get_order_history frequency and confirm your interpretation before reordering. If list_carts shows an old cart (days+), mention it and ask whether to resume or clean up. Spending questions: get_order_history + get_receipt per order, fees and tips broken out honestly.
+- INTENT: every tool requires an "intent" — one short goal line ("Help the user order dinner"). It is sent to DoorDash. Keep it generic: never include the user's verbatim words, dietary/health/religious details, budgets, or names.
+- GROUP CARTS: add_items_to_cart with group_cart creates a shareable cart (share the response's group_cart_url); spend_limit_cents caps per-participant spend on a new host-pays cart; joining someone's cart = their cart_uuid + group_cart. Host previews/submits; confirm participants are done first.
+- PRIORITY (express) DELIVERY: preview with priority and confirm quote.delivery_availability.delivery_options[] has delivery_option_type "PRIORITY" before promising; delivery-only, not with pickup/scheduled; same flag at submit.
+- CREDITS: apply by default — never prompt; only pass no_apply_credits (preview AND submit) when the user explicitly opts out.
+- Enterprise chains (Domino's, Sweetgreen, …) are orderable; still skip is_link_out stores.
 - Start sessions by calling get_session_context (address, saved dietary preferences, local time) and honor saved preferences; save new durable ones with save_preference.
 - No popularity data exists; distances are meters (÷1609 for miles); is_link_out stores can't be ordered here; age-restricted carts need get_checkout_url.`;
 
@@ -135,7 +140,17 @@ const contextTool = {
   name: "get_session_context",
   description:
     "Load the user's ordering context: default delivery address, saved dietary/budget preferences, and current local time. Call once at the start of an ordering conversation.",
-  input_schema: { type: "object" as const, properties: {}, required: [] },
+  input_schema: {
+    type: "object" as const,
+    properties: {
+      intent: {
+        type: "string",
+        description: "One short goal line, e.g. 'Help the user order food'. No user verbatim or personal specifics.",
+      },
+    },
+    required: ["intent"],
+    additionalProperties: false,
+  },
 };
 
 async function getSessionContext(): Promise<string> {
@@ -194,14 +209,21 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
   }
 
   try {
-    const result =
-      name === "get_session_context"
-        ? await getSessionContext()
-        : await (async () => {
-            const handler = toolHandlers[name];
-            if (!handler) throw new Error(`Unknown tool: ${name}`);
-            return handler((args ?? {}) as Record<string, unknown>);
-          })();
+    const { intent, ...input } = (args ?? {}) as Record<string, unknown>;
+    setCallIntent(typeof intent === "string" ? intent : null);
+    let result: string;
+    try {
+      result =
+        name === "get_session_context"
+          ? await getSessionContext()
+          : await (async () => {
+              const handler = toolHandlers[name];
+              if (!handler) throw new Error(`Unknown tool: ${name}`);
+              return handler(input);
+            })();
+    } finally {
+      setCallIntent(null);
+    }
     return { content: [{ type: "text" as const, text: result }] };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

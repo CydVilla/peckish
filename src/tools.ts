@@ -162,7 +162,7 @@ export const toolHandlers: Record<string, Handler> = {
     return j(await ddJson(args, { retryOnce: true }));
   },
 
-  async add_items_to_cart({ store_id, menu_id, items, cart_uuid, fulfillment }) {
+  async add_items_to_cart({ store_id, menu_id, items, cart_uuid, fulfillment, group_cart, spend_limit_cents }) {
     const cleaned = (items as any[]).map((it) => ({
       ...it,
       item_id: String(it.item_id).replace(/^i_/, ""),
@@ -179,6 +179,8 @@ export const toolHandlers: Record<string, Handler> = {
     ];
     if (cart_uuid) args.push("--cart-uuid", String(cart_uuid));
     if (fulfillment) args.push("--fulfillment", String(fulfillment));
+    if (group_cart) args.push("--group-cart");
+    if (spend_limit_cents != null) args.push("--spend-limit-cents", String(spend_limit_cents));
     return j(await ddJson(args));
   },
 
@@ -203,11 +205,13 @@ export const toolHandlers: Record<string, Handler> = {
     return j(await ddJson(["cart", "delete", "--cart-uuid", String(cart_uuid)]));
   },
 
-  async preview_order({ cart_uuid, scheduled_time, include_work_benefits, selected_budget_id, fulfillment }) {
+  async preview_order({ cart_uuid, scheduled_time, include_work_benefits, selected_budget_id, fulfillment, priority, no_apply_credits }) {
     const base = ["order", "preview", "--cart-uuid", String(cart_uuid)];
     if (scheduled_time) base.push("--scheduled-time", String(scheduled_time));
     if (include_work_benefits) base.push("--include-work-benefits");
     if (selected_budget_id) base.push("--selected-budget-id", String(selected_budget_id));
+    if (priority) base.push("--priority");
+    if (no_apply_credits) base.push("--no-apply-credits");
 
     // Canonical human-facing summary first (per dd-cli guidance), then the
     // structured quote for programmatic fields, then the default card.
@@ -249,6 +253,9 @@ export const toolHandlers: Record<string, Handler> = {
             asap_pickup_available: quote.delivery_availability.asap_pickup_available,
             scheduled_delivery_available: quote.delivery_availability.scheduled_delivery_available,
             is_within_delivery_region: quote.delivery_availability.is_within_delivery_region,
+            // v0.2.1: PRIORITY entry here means express delivery is offered;
+            // the requested option arrives marked when --priority was passed.
+            delivery_options: quote.delivery_availability.delivery_options,
           }
         : undefined,
       pin_code_required: ((quote.dropoff_options as any[]) ?? []).some(
@@ -291,6 +298,8 @@ export const toolHandlers: Record<string, Handler> = {
     confirmation_summary,
     scheduled_time,
     fulfillment,
+    priority,
+    no_apply_credits,
     team_id,
     budget_id,
     team_account_id,
@@ -312,6 +321,8 @@ export const toolHandlers: Record<string, Handler> = {
     args.push("--tip-cents", String(tip_cents ?? 0));
     if (scheduled_time) args.push("--scheduled-time", String(scheduled_time));
     if (fulfillment) args.push("--fulfillment", String(fulfillment));
+    if (priority) args.push("--priority");
+    if (no_apply_credits) args.push("--no-apply-credits");
     if (team_id) args.push("--team-id", String(team_id));
     if (budget_id) args.push("--budget-id", String(budget_id));
     if (team_account_id) args.push("--team-account-id", String(team_account_id));
@@ -608,8 +619,14 @@ const RAW_TOOLS: Anthropic.Tool[] = [
             required: ["item_id", "item_name", "quantity"],
           },
         },
-        cart_uuid: str("Existing cart to append to (omit to create/append to store's open cart)"),
+        cart_uuid: str("Existing cart to append to (omit to create/append to store's open cart). For someone else's group cart: pass their cart_uuid to join as a participant."),
         fulfillment: { type: "string", enum: ["delivery", "pickup"], description: "Mode for a NEW cart (default delivery)" },
+        group_cart: bool(
+          "Create a shareable GROUP cart (no cart_uuid), or join another person's group cart (with their cart_uuid). Response carries group_cart_url — share it with participants.",
+        ),
+        spend_limit_cents: int(
+          "Per-participant spend limit in CENTS for a NEW host-pays group cart (2500 = $25). Requires group_cart; cannot combine with cart_uuid. Omit for unlimited.",
+        ),
       },
       required: ["store_id", "menu_id", "items"],
     },
@@ -662,6 +679,12 @@ const RAW_TOOLS: Anthropic.Tool[] = [
           enum: ["delivery", "pickup"],
           description: "MUTATES the cart's mode before pricing — only pass when the user explicitly asked to switch",
         },
+        priority: bool(
+          "Request Priority (express) delivery — a paid, faster upgrade. Delivery-only; incompatible with pickup and scheduled_time. Verify quote.delivery_availability.delivery_options[] contains delivery_option_type 'PRIORITY' before promising it; pass the same flag at submit.",
+        ),
+        no_apply_credits: bool(
+          "Opt OUT of applying DoorDash credits (they apply by default — do not prompt about them). Pass ONLY when the user explicitly asks not to use credits; all-or-nothing; pass the same flag at submit.",
+        ),
       },
       required: ["cart_uuid"],
     },
@@ -680,6 +703,8 @@ const RAW_TOOLS: Anthropic.Tool[] = [
         ),
         scheduled_time: str("Must match the value used in preview, if any"),
         fulfillment: { type: "string", enum: ["delivery", "pickup"], description: "Only to match a mode explicitly set at preview" },
+        priority: bool("MUST match the preview: pass iff the previewed quote used priority"),
+        no_apply_credits: bool("MUST match the preview: pass iff the user opted out of credits there"),
         team_id: str("Work benefits: quote.team_id from preview"),
         budget_id: str("Work benefits: chosen budget id"),
         team_account_id: str("Work benefits: budget's team_account_id when present"),
@@ -903,10 +928,28 @@ export function strictifySchema<T>(node: T): T {
   return node;
 }
 
+/**
+ * dd-cli ≥0.2.1 requires --intent on every command. Injected mechanically as a
+ * required param on every tool so the model supplies it once per call; the
+ * dispatcher routes it to the wrapper (see setCallIntent). Peckish's privacy
+ * default sends this goal summary WITHOUT the user's verbatim words.
+ */
+export const INTENT_PARAM_DESCRIPTION =
+  "One short line stating who this is for and the goal, e.g. 'Help the user order dinner'. DO NOT include the user's verbatim words, dietary/health/religious details, budgets, names, or other personal specifics — a generic goal is expected.";
+
+function withIntentParam(schema: Anthropic.Tool.InputSchema): Anthropic.Tool.InputSchema {
+  const properties = {
+    ...(schema.properties as Record<string, unknown>),
+    intent: { type: "string", description: INTENT_PARAM_DESCRIPTION },
+  };
+  const required = Array.from(new Set([...((schema.required as string[]) ?? []), "intent"]));
+  return { ...schema, properties, required };
+}
+
 export const tools: Anthropic.Tool[] = RAW_TOOLS.map((t) => ({
   ...t,
   strict: true,
-  input_schema: strictifySchema(t.input_schema),
+  input_schema: strictifySchema(withIntentParam(t.input_schema)),
 }));
 
 export function preferencesForPrompt(): string {

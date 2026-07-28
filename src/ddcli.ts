@@ -64,7 +64,11 @@ function execDd(args: string[]): Promise<{ stdout: string; stderr: string }> {
       (err, stdout, stderr) => {
         if (err) {
           const detail = `${stdout}\n${stderr}`.trim();
-          if (/missing credentials|sign in with dd-cli login|token has expired/i.test(detail)) {
+          if (
+            /missing credentials|sign in with dd-cli login|token has expired|failed to authenticate|try running dd-cli login/i.test(
+              detail,
+            )
+          ) {
             reject(
               new DdCliError(
                 "DoorDash sign-in is missing or expired. The user must run `dd-cli login` in a separate terminal, then retry.",
@@ -88,6 +92,47 @@ function execDd(args: string[]): Promise<{ stdout: string; stderr: string }> {
       },
     );
   });
+}
+
+// ---------------------------------------------------------------------------
+// Intent (dd-cli ≥0.2.1 requires --intent on every consumer command).
+//
+// PRIVACY DEFAULT: dd-cli's documented format asks for the user's VERBATIM
+// prompt, which DoorDash may review. Food prompts routinely carry dietary,
+// health, and religious signals — exactly what DoorDash's own guidance says
+// to avoid — so Peckish sends a short goal summary and explicitly withholds
+// the verbatim line unless PECKISH_INTENT_VERBATIM=1 is set. Documented in
+// the README; the model is instructed to keep summaries constraint-free.
+// ---------------------------------------------------------------------------
+
+/** Sequential-dispatch call context; set by the tool dispatcher per call. */
+let currentIntent: string | null = null;
+
+export function setCallIntent(intent: string | null): void {
+  currentIntent = intent && intent.trim() ? intent.trim() : null;
+}
+
+export const INTENT_VERBATIM = process.env.PECKISH_INTENT_VERBATIM === "1";
+
+const FALLBACK_INTENT = "Operate the Peckish food-ordering app for its signed-in user.";
+
+export function formatIntent(raw: string | null): string {
+  const value = (raw ?? "").trim() || FALLBACK_INTENT;
+  if (/user prompt\/purpose:/i.test(value)) {
+    // Verbatim mode: the model already produced the full two-line format.
+    return /^summary:/i.test(value) ? value : `Summary: ${value}`;
+  }
+  const summary = value.replace(/^summary:\s*/i, "");
+  return `Summary: ${summary}\nuser prompt/purpose: "(not shared — Peckish privacy default)"`;
+}
+
+/** Commands that do not accept --intent. */
+const NO_INTENT_COMMANDS = new Set(["login"]);
+
+function withIntent(args: string[]): string[] {
+  if (args.length && NO_INTENT_COMMANDS.has(args[0])) return args;
+  if (args.includes("--intent")) return args;
+  return [...args, "--intent", formatIntent(currentIntent)];
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -123,7 +168,7 @@ export async function ddJson(
 }
 
 async function ddJsonOnce(args: string[]): Promise<Record<string, unknown>> {
-  const { stdout } = await execDd(["--json-output", ...args]);
+  const { stdout } = await execDd(["--json-output", ...withIntent(args)]);
   let envelope: unknown;
   try {
     envelope = JSON.parse(stdout);
@@ -155,7 +200,7 @@ async function ddJsonOnce(args: string[]): Promise<Record<string, unknown>> {
 
 /** Run a dd-cli command in --beautify mode and return the plain text. */
 export async function ddBeautify(args: string[]): Promise<string> {
-  const { stdout } = await execDd([...args, "--beautify"]);
+  const { stdout } = await execDd([...withIntent(args), "--beautify"]);
   return stdout.trim();
 }
 

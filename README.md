@@ -68,8 +68,9 @@ ending 1234. Suggested Dasher tip is $3.50 — that, another amount, or none?
 - **A Mac with Apple Silicon** (M1–M4). Peckish is local-first: your Mac is the
   backend on every surface, because dd-cli authenticates against your keychain.
 - **Node.js 20+** — `node --version` to check; install from nodejs.org or brew.
-- **DoorDash CLI access** (currently waitlist-gated by DoorDash). Download the
-  release from [doordash-oss/doordash-cli](https://github.com/doordash-oss/doordash-cli/releases),
+- **DoorDash CLI access** (currently waitlist-gated by DoorDash). Peckish
+  0.4.0 requires **dd-cli ≥ 0.2.1**. Download the release from
+  [doordash-oss/doordash-cli](https://github.com/doordash-oss/doordash-cli/releases),
   **verify the SHA256 checksum against the published value**, then:
   ```sh
   tar -xzf dd-cli-v*-darwin-arm64.tar.gz && cd dd-cli-v*-darwin-arm64
@@ -199,6 +200,7 @@ the client chooses and pays for the model.)
 | Symptom | Fix |
 |---|---|
 | `DoorDash sign-in is missing or expired` | Run `dd-cli login` in a terminal, restart Peckish |
+| Auth errors right after upgrading dd-cli | New CLI versions can need fresh scopes — run `dd-cli login` again |
 | `Anthropic authentication failed` | `export ANTHROPIC_API_KEY=…` in the same shell, restart |
 | `dd-cli binary not found` | Install dd-cli (step 1) or set `DD_CLI_PATH=/path/to/dd-cli` |
 | Web app port in use | `PECKISH_PORT=5757 peckish-web` |
@@ -261,6 +263,15 @@ Building it yourself: `cd desktop && npm install && npm run dist` →
   receipts, reorders with silent-drop detection.
 - **Web reviews** via Claude's server-side web search (never used for prices —
   dd-cli is the only source of truth for ordering data).
+- **Group carts** (new in 0.4.0): "start a group order for the team, $25 each" —
+  creates a shareable cart link, optional per-person spend limit, host reviews
+  and submits when everyone's in.
+- **Express delivery** (new): asks for Priority when you want it fastest —
+  offered per-cart, priced into the quote before you approve.
+- **Credits control** (new): DoorDash credits apply by default; say "don't use
+  my credits" to opt out for an order.
+- **Enterprise chains** (new): Domino's, Sweetgreen, Dave's Hot Chicken and
+  other big chains are now orderable (dd-cli ≥ 0.2.1).
 - Work benefits (company budgets + expense codes), scheduled delivery,
   pickup, groceries/retail/pets/alcohol.
 
@@ -307,6 +318,25 @@ Also on every surface:
 - Merchant text treated as data (widget/assistant-instruction fields stripped);
   read-only CLI calls retry once on transient errors, mutations never do.
 - Web server is localhost-only (Host + Origin checks).
+
+## What Peckish shares with DoorDash
+
+dd-cli ≥ 0.2.1 requires an `--intent` note on every command, which DoorDash
+says it may review for research and product improvement. DoorDash's documented
+format asks for your **verbatim prompt** — but food prompts routinely contain
+dietary, health, and religious signals, which DoorDash's own guidance says to
+avoid. So Peckish defaults to privacy:
+
+- **What is sent:** a one-line goal summary authored by the model at generic
+  altitude (e.g. `Summary: Help the user order dinner`), plus an explicit
+  `user prompt/purpose: "(not shared — Peckish privacy default)"` marker.
+- **What is never sent by default:** your verbatim words, dietary rules,
+  budgets, names, saved preferences, or conversation content.
+- **Opt in to the full format:** set `PECKISH_INTENT_VERBATIM=1` and the
+  intent will include your opening request verbatim, as DoorDash's docs ask.
+
+Independent of intent, DoorDash necessarily sees the API traffic itself
+(searches, carts, orders) — that's inherent to ordering.
 
 ## Repo map
 

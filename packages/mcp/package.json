@@ -1,8 +1,8 @@
 {
   "name": "peckish-mcp",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "mcpName": "io.github.CydVilla/peckish",
-  "description": "MCP server that lets Claude order food on DoorDash — search, compare real fee-included totals, build carts, and place orders behind a human approval dialog.",
+  "description": "MCP server that lets Claude order food on DoorDash \u2014 search, compare real fee-included totals, build carts, and place orders behind a human approval dialog.",
   "type": "module",
   "license": "MIT",
   "author": "Cyd Villavicencio",
@@ -38,6 +38,6 @@
     "node": ">=20"
   },
   "dependencies": {
-    "peckish": "^0.3.0"
+    "peckish": "^0.4.0"
   }
 }

@@ -4,7 +4,7 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { stripUiFields, isTransient, DdCliError } from "../src/ddcli.js";
+import { stripUiFields, isTransient, formatIntent, DdCliError } from "../src/ddcli.js";
 import { tools, strictifySchema, trimMenuItem } from "../src/tools.js";
 import { addUsage, EMPTY_USAGE, estimateCostUsd, formatCost } from "../src/costs.js";
 
@@ -97,10 +97,34 @@ test("strictifySchema does not mutate its input", () => {
   assert.equal(JSON.stringify(input), before);
 });
 
+test("every tool requires the intent param (dd-cli >=0.2.1)", () => {
+  for (const t of tools) {
+    const schema = t.input_schema as any;
+    assert.ok(schema.properties.intent, `${t.name} missing intent property`);
+    assert.ok((schema.required as string[]).includes("intent"), `${t.name} must require intent`);
+  }
+});
+
+test("formatIntent privacy default withholds the verbatim line", () => {
+  const out = formatIntent("Help the user order dinner");
+  assert.match(out, /^Summary: Help the user order dinner\n/);
+  assert.match(out, /user prompt\/purpose: "\(not shared/);
+});
+
+test("formatIntent passes through a model-authored verbatim format", () => {
+  const full = 'Summary: Help the user order lunch\nuser prompt/purpose: "get me tacos"';
+  assert.equal(formatIntent(full), full);
+});
+
+test("formatIntent falls back when the model omits intent", () => {
+  assert.match(formatIntent(null), /^Summary: Operate the Peckish/);
+  assert.match(formatIntent("  "), /^Summary: Operate the Peckish/);
+});
+
 test("required fields survive strictification", () => {
   const addItems = tools.find((t) => t.name === "add_items_to_cart")!;
   const schema = addItems.input_schema as any;
-  assert.deepEqual(schema.required, ["store_id", "menu_id", "items"]);
+  assert.deepEqual(schema.required, ["store_id", "menu_id", "items", "intent"]);
   const itemSchema = schema.properties.items.items;
   assert.deepEqual(itemSchema.required, ["item_id", "item_name", "quantity"]);
   assert.equal(itemSchema.additionalProperties, false);

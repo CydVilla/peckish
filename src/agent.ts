@@ -10,7 +10,7 @@
  */
 import Anthropic from "@anthropic-ai/sdk";
 import { tools, toolHandlers, preferencesForPrompt } from "./tools.js";
-import { DdCliError } from "./ddcli.js";
+import { DdCliError, setCallIntent, INTENT_VERBATIM } from "./ddcli.js";
 import { logEvent, logToolCall } from "./logger.js";
 import {
   addUsage,
@@ -86,6 +86,28 @@ Any mention of work/office/company/team/employer/expense — or a Work-labeled d
 - Popularity: DoorDash provides no reliable best-seller data — say so if asked. (Web reviews may still help; attribute them.)
 - Distances arrive in meters — present miles (÷1609).
 - Age-restricted items can't be submitted by an agent; hand over the checkout URL.
+
+# The intent parameter (required on every tool call)
+Every tool takes an "intent" — one short line naming the audience and goal (e.g. "Help the user order dinner", "Help the user compare grocery prices"). This is sent to DoorDash, which may review it. Keep it at goal altitude: NEVER include the user's verbatim words, dietary/health/religious details, budget figures, names, or anything about other people. Reuse the same intent across calls in one workflow.${
+  INTENT_VERBATIM
+    ? `\nVERBATIM MODE IS ON (the user enabled PECKISH_INTENT_VERBATIM=1): format the intent as two lines — the goal line, then a newline and: user prompt/purpose: "<the user's opening request for this workflow, verbatim>".`
+    : ""
+}
+
+# Group carts (shared orders)
+- "Order with friends/team" → add_items_to_cart with group_cart. Share the response's group_cart_url so others add their own items (from the DoorDash app or another Peckish). It stays null for personal carts.
+- Host-pays with a cap: spend_limit_cents on the NEW group cart (e.g. 2500 = $25/person); omit for unlimited. Cannot be set when joining an existing cart.
+- Joining someone else's group cart: their cart_uuid + group_cart on add_items_to_cart.
+- Everything downstream (show_cart, preview_order, submit_order) works on the group cart_uuid; the host previews and submits. Before submitting, confirm participants are done adding.
+
+# Express (Priority) delivery
+When the user wants it fastest, preview with priority and check quote.delivery_availability.delivery_options[] for delivery_option_type "PRIORITY" before promising anything — not every cart offers it. It is delivery-only, incompatible with pickup and scheduled_time, and costs extra (the quote reflects it). Pass priority at submit iff it was in the accepted preview.
+
+# Credits
+DoorDash credits apply by default — never prompt about them; just mention when the preview shows them applied. Only when the user explicitly says to NOT use credits, re-preview with no_apply_credits and carry the same flag to submit.
+
+# Enterprise chains
+Big chains (e.g. Domino's, Sweetgreen) are orderable as of dd-cli v0.2.1 — treat them like any store. Still skip stores the search marks is_link_out.
 
 # Preferences
 When the user states a durable preference ("never mushrooms", "I always tip 20%", "default to pickup"), save_preference it — short, self-contained notes. Apply saved preferences without being asked, and mention when one shaped a choice ("skipped the risotto — it has mushrooms, which you avoid").
@@ -245,7 +267,13 @@ export async function runTurn(
             isError = true;
           } else {
             try {
-              content = await handler(tu.input as Record<string, unknown>);
+              const { intent, ...input } = tu.input as Record<string, unknown>;
+              setCallIntent(typeof intent === "string" ? intent : null);
+              try {
+                content = await handler(input);
+              } finally {
+                setCallIntent(null);
+              }
             } catch (err) {
               isError = true;
               content =
