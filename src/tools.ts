@@ -897,10 +897,13 @@ const RAW_TOOLS: Anthropic.Tool[] = [
   },
   {
     name: "remove_preference",
-    description: "Delete a saved preference note (exact text match).",
+    description:
+      "Delete one saved user preference when the user retracts or reverses it ('actually, mushrooms are fine now', 'stop defaulting to pickup'). Pass the note's exact stored text — as listed in the session context or returned by save_preference — since matching is by exact text (case-insensitive). Returns the remaining preferences so you can confirm what's still active.",
     input_schema: {
       type: "object",
-      properties: { note: str("Exact note text to remove") },
+      properties: {
+        note: str("The exact text of the stored preference note to delete, e.g. 'Avoid mushrooms in all dishes'"),
+      },
       required: ["note"],
     },
   },
