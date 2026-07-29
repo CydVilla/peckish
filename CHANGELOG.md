@@ -6,6 +6,22 @@ versions follow semver (0.x: minor = features, patch = fixes). Each release on
 file's section for that version, every downloadable artifact, and a
 `SHA256SUMS.txt` to verify them.
 
+## [Unreleased]
+
+### Added
+- **Sign-in assist**: when DoorDash sign-in is missing or expired, Peckish now
+  offers to fix it instead of sending you to a terminal. The terminal app asks
+  before launching `dd-cli login` (which opens your browser) and waits for it;
+  the web app serves a sign-in card instead of refusing to boot; and a new
+  `start_signin` tool lets the agent offer the same assist mid-conversation on
+  every surface — always behind an explicit approval prompt, and it never
+  opens a second sign-in window while one is pending.
+
+### Fixed
+- The extension manifest's version is now read from `extension/package.json`
+  and its tool list from the repo's own build (previously a hardcoded version
+  and the installed npm package could both drift).
+
 ## [0.4.0] - 2026-07-28
 
 Compatibility release for **dd-cli v0.2.1** (required — older dd-cli versions

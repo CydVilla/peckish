@@ -22,6 +22,7 @@ import {
   type TurnUsageReport,
 } from "./agent.js";
 import { getDefaultAddress, openCartsLine, DdCliError, resolveDdCliPath } from "./ddcli.js";
+import { isAuthError, launchLogin, waitForSignin } from "./signin.js";
 import { registerTerminalProviders } from "./confirm.js";
 import { listPreferences, preferencesFilePath } from "./prefs.js";
 import { formatCost } from "./costs.js";
@@ -44,18 +45,46 @@ function nowStamp(): string {
 }
 
 async function preflight(): Promise<string | null> {
-  try {
-    const def = await getDefaultAddress();
-    if (!def) return null;
-    const label = def.label ? `"${def.label}" — ` : "";
-    return `${label}${def.printable_address}`;
-  } catch (err) {
-    if (err instanceof DdCliError) {
+  const def = await getDefaultAddress();
+  if (!def) return null;
+  const label = def.label ? `"${def.label}" — ` : "";
+  return `${label}${def.printable_address}`;
+}
+
+/**
+ * Boot-time sign-in assist: offer to launch `dd-cli login` (opens the
+ * browser) and poll until it works. Returns true once signed in.
+ */
+async function offerSigninAssist(): Promise<boolean> {
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  const answer = await new Promise<string>((resolve) =>
+    rl.question("Open the DoorDash sign-in in your browser now? [Y/n] ", resolve),
+  );
+  rl.close();
+  if (["n", "no"].includes(answer.trim().toLowerCase())) return false;
+  launchLogin();
+  process.stdout.write(dim("waiting for you to finish signing in in the browser "));
+  const res = await waitForSignin({ onTick: () => process.stdout.write(dim(".")) });
+  process.stdout.write("\n");
+  if (res.error) console.error(red(`✗ ${res.error}`));
+  else if (!res.signedIn) console.error(red("✗ sign-in didn't complete within 3 minutes"));
+  return res.signedIn;
+}
+
+async function preflightWithAssist(): Promise<string | null> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await preflight();
+    } catch (err) {
+      if (!(err instanceof DdCliError)) throw err;
       console.error(red(`\n✗ ${err.message}`));
+      if (isAuthError(err) && attempt === 0 && (await offerSigninAssist())) {
+        process.stdout.write(dim("signed in — retrying… "));
+        continue;
+      }
       if (err.detail) console.error(dim(err.detail.slice(0, 300)));
       process.exit(1);
     }
-    throw err;
   }
 }
 
@@ -65,7 +94,10 @@ async function main(): Promise<void> {
       dim(`  ·  ${MODEL} @ ${EFFORT} effort  ·  dd-cli @ ${resolveDdCliPath()}`),
   );
   process.stdout.write(dim("checking DoorDash sign-in… "));
-  const [addressLine, cartsLine] = await Promise.all([preflight(), openCartsLine()]);
+  // Sequential on purpose: the sign-in assist may run interactively between
+  // these, and the carts line is only meaningful once sign-in works.
+  const addressLine = await preflightWithAssist();
+  const cartsLine = await openCartsLine();
   console.log(green("ok"));
   if (addressLine) console.log(dim(`delivering to: ${addressLine}`));
   if (cartsLine !== "none" && cartsLine !== "unknown")

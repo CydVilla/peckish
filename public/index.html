@@ -160,6 +160,19 @@
     border-radius: 999px; padding: 2px 9px; opacity: 0; transition: opacity .15s;
   }
   .suggestion:hover .go { opacity: 1; color: var(--accent); border-color: var(--accent); }
+  .signin-card {
+    margin: 26px auto 0; max-width: 580px; background: var(--panel);
+    border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 18px 20px; text-align: left;
+  }
+  .signin-card .t { font-weight: 700; margin-bottom: 4px; }
+  .signin-card .d { color: var(--muted); font-size: 0.88rem; line-height: 1.5; margin-bottom: 12px; }
+  .signin-card button {
+    background: var(--accent); color: #fff; border: none; border-radius: 10px;
+    padding: 10px 18px; font-weight: 700; font-size: 0.92rem; cursor: pointer;
+  }
+  .signin-card button:disabled { opacity: 0.55; cursor: default; }
+  .signin-card .s { color: var(--muted); font-size: 0.82rem; margin-top: 10px; min-height: 1em; }
   .hello { text-align: center; margin-top: 9vh; }
   .hello .big { font-size: 2.1rem; font-weight: 800; letter-spacing: -0.03em; }
   .hello .sub { color: var(--muted); margin-top: 6px; }
@@ -198,6 +211,14 @@
   <div id="addr-pop"></div>
 
   <div id="chat"><div class="inner" id="feed">
+    <div class="signin-card" id="signin-card" style="display:none">
+      <div class="t">DoorDash sign-in needed</div>
+      <div class="d">Your DoorDash session is missing or expired. Peckish can open the
+        DoorDash sign-in in your browser — finish it there and this page picks it up
+        automatically.</div>
+      <button id="signin-btn">Sign in with DoorDash</button>
+      <div class="s" id="signin-status"></div>
+    </div>
     <div class="hello" id="hello">
       <div class="big">Feeling peckish?</div>
       <div class="sub">Just ask. I'll search, compare fees, build the cart — you approve the order.</div>
@@ -555,12 +576,43 @@ document.addEventListener("click", (ev) => {
   }
 });
 
+// ── DoorDash sign-in assist ───────────────────────────────────────────────
+const signinCard = document.getElementById("signin-card");
+const signinBtn = document.getElementById("signin-btn");
+const signinStatus = document.getElementById("signin-status");
+let signinTimer = null;
+
+async function pollSignin() {
+  try {
+    const s = await (await fetch("/api/signin-status")).json();
+    if (s.signed_in) {
+      clearInterval(signinTimer);
+      signinTimer = null;
+      signinStatus.textContent = "✓ signed in";
+      const st = await (await fetch("/api/state")).json();
+      addrChip.textContent = st.address || "no default address";
+      setTimeout(() => { signinCard.style.display = "none"; }, 1500);
+    } else if (s.error) {
+      signinStatus.textContent = s.error;
+      signinBtn.disabled = false;
+    }
+  } catch { /* server briefly unreachable — keep polling */ }
+}
+
+signinBtn.onclick = async () => {
+  signinBtn.disabled = true;
+  signinStatus.textContent = "waiting for the browser sign-in to finish…";
+  await fetch("/api/signin", { method: "POST" });
+  if (!signinTimer) signinTimer = setInterval(pollSignin, 3000);
+};
+
 // ── header state ──────────────────────────────────────────────────────────
 fetch("/api/state").then((r) => r.json()).then((s) => {
   document.getElementById("chip-address").textContent = s.address || "no default address";
   document.getElementById("chip-model").textContent = s.model + " @ " + (s.effort || "medium");
   document.getElementById("chip-cost").textContent = (s.session_cost || "<$0.01") + " session";
   if (s.busy) setBusy(true);
+  if (s.needs_signin) signinCard.style.display = "block";
 });
 </script>
 </body>

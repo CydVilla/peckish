@@ -10,6 +10,7 @@ import type Anthropic from "@anthropic-ai/sdk";
 import { ddJson, ddBeautify, getDefaultAddress, DdCliError } from "./ddcli.js";
 import { addPreference, removePreference, listPreferences } from "./prefs.js";
 import { confirmOrderPlacement, confirmAction } from "./confirm.js";
+import { probeSignin, launchLogin, loginInProgress, waitForSignin } from "./signin.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -469,6 +470,43 @@ export const toolHandlers: Record<string, Handler> = {
     return j(await ddJson(args));
   },
 
+  async start_signin() {
+    // The user may have fixed it already (e.g. ran login in a terminal).
+    let alreadyWorks = false;
+    try {
+      alreadyWorks = await probeSignin();
+    } catch (err) {
+      if (err instanceof DdCliError) return j({ signed_in: false, error: err.message });
+      throw err;
+    }
+    if (alreadyWorks) {
+      return j({ signed_in: true, note: "Sign-in already works — retry the request that failed." });
+    }
+    if (!loginInProgress()) {
+      const ok = await confirmAction(
+        "DoorDash sign-in is missing or expired. Open the DoorDash sign-in flow in your browser now (runs `dd-cli login` locally)?",
+      );
+      if (!ok) {
+        return j({
+          started: false,
+          declined_or_unavailable: true,
+          note: "Sign-in was not approved on this surface. Ask the user to run `dd-cli login` in a terminal themselves, then retry the original request.",
+        });
+      }
+      launchLogin();
+    }
+    const res = await waitForSignin({ timeoutMs: 45_000, intervalMs: 3_000 });
+    if (res.signedIn) {
+      return j({ signed_in: true, note: "DoorDash sign-in verified — retry the request that failed." });
+    }
+    if (res.error) return j({ signed_in: false, error: res.error });
+    return j({
+      signed_in: false,
+      login_in_progress: true,
+      note: "The browser sign-in has not completed yet. Call start_signin again to keep waiting (it will NOT open another window), or ask the user whether they need more time.",
+    });
+  },
+
   async save_preference({ note }) {
     return j({ preferences: addPreference(String(note)) });
   },
@@ -884,6 +922,12 @@ const RAW_TOOLS: Anthropic.Tool[] = [
       },
       required: ["items"],
     },
+  },
+  {
+    name: "start_signin",
+    description:
+      "Fix a broken DoorDash sign-in WITHOUT sending the user to a terminal. Call when a tool fails with 'sign-in is missing or expired' AND the user wants to continue: after they approve a confirmation prompt, this launches `dd-cli login` (opens their browser) and polls until the sign-in works, up to ~45s per call. If it returns login_in_progress, call it again to keep waiting — repeat calls never open a second window. On signed_in, retry the request that originally failed.",
+    input_schema: { type: "object", properties: {}, required: [] },
   },
   {
     name: "save_preference",

@@ -1,10 +1,10 @@
 {
   "manifest_version": "0.3",
   "name": "peckish",
-  "display_name": "Peckish \u2014 DoorDash ordering",
+  "display_name": "Peckish — DoorDash ordering",
   "version": "0.4.0",
-  "description": "Order food on DoorDash from Claude \u2014 you approve every order.",
-  "long_description": "Peckish gives Claude real DoorDash ordering: it searches stores, compares true fee-included totals from live quotes, builds carts, scans promos, and handles groceries, pickup, scheduled delivery, reorders and spend questions.\n\nPlacing an order always requires an approval dialog you answer yourself \u2014 Claude must first show the itemized quote, confirm the Dasher tip, and name the card being charged. Submission never auto-retries, and every tool call and confirmation is logged to ~/.peckish/logs/.\n\nRequires a Mac with Apple Silicon and DoorDash's dd-cli (waitlist-gated), signed in via `dd-cli login`. No Anthropic API key needed \u2014 your Claude subscription powers the model.",
+  "description": "Order food on DoorDash from Claude — you approve every order.",
+  "long_description": "Peckish gives Claude real DoorDash ordering: it searches stores, compares true fee-included totals from live quotes, builds carts, scans promos, and handles groceries, pickup, scheduled delivery, reorders and spend questions.\n\nPlacing an order always requires an approval dialog you answer yourself — Claude must first show the itemized quote, confirm the Dasher tip, and name the card being charged. Submission never auto-retries, and every tool call and confirmation is logged to ~/.peckish/logs/.\n\nRequires a Mac with Apple Silicon and DoorDash's dd-cli (waitlist-gated), signed in via `dd-cli login`. No Anthropic API key needed — your Claude subscription powers the model.",
   "author": {
     "name": "Cyd Villavicencio",
     "url": "https://github.com/CydVilla"
@@ -43,7 +43,7 @@
     "dd_cli_path": {
       "type": "file",
       "title": "dd-cli location (optional)",
-      "description": "Leave blank if dd-cli is at ~/.local/bin/dd-cli. Set it if you installed the DoorDash CLI somewhere else \u2014 desktop apps don't inherit your shell PATH.",
+      "description": "Leave blank if dd-cli is at ~/.local/bin/dd-cli. Set it if you installed the DoorDash CLI somewhere else — desktop apps don't inherit your shell PATH.",
       "required": false
     }
   },
@@ -67,11 +67,11 @@
     },
     {
       "name": "get_menu",
-      "description": "Fetch a restaurant's menu: returns menu_id (needed for cart adds and item details), store_is_open, and item\u2026"
+      "description": "Fetch a restaurant's menu: returns menu_id (needed for cart adds and item details), store_is_open, and item…"
     },
     {
       "name": "get_restaurant_item_details",
-      "description": "Full details for one restaurant menu item: price, description, and extras[] customization groups (each with\u2026"
+      "description": "Full details for one restaurant menu item: price, description, and extras[] customization groups (each with…"
     },
     {
       "name": "get_store_details",
@@ -87,7 +87,7 @@
     },
     {
       "name": "show_cart",
-      "description": "Show cart contents (no pricing \u2014 use preview_order for that)."
+      "description": "Show cart contents (no pricing — use preview_order for that)."
     },
     {
       "name": "remove_cart_item",
@@ -99,19 +99,19 @@
     },
     {
       "name": "preview_order",
-      "description": "Authoritative pricing + logistics for a cart (read-only, no charge): display_summary (show VERBATIM to the\u2026"
+      "description": "Authoritative pricing + logistics for a cart (read-only, no charge): display_summary (show VERBATIM to the…"
     },
     {
       "name": "submit_order",
-      "description": "Place the order \u2014 charges the user's real payment method."
+      "description": "Place the order — charges the user's real payment method."
     },
     {
       "name": "get_checkout_url",
-      "description": "Browser checkout URL for a cart \u2014 FALLBACK ONLY, for edits the CLI can't make: swap payment method, opt out\u2026"
+      "description": "Browser checkout URL for a cart — FALLBACK ONLY, for edits the CLI can't make: swap payment method, opt out…"
     },
     {
       "name": "get_order_history",
-      "description": "Past orders (default 50 orders / 90 days, max 100 / 365): store, items, total, order_uuid, is_reorderable,\u2026"
+      "description": "Past orders (default 50 orders / 90 days, max 100 / 365): store, items, total, order_uuid, is_reorderable,…"
     },
     {
       "name": "reorder",
@@ -119,7 +119,7 @@
     },
     {
       "name": "get_order_status",
-      "description": "Check whether a submitted order went through: successful | pending (check again) | action_required (user mu\u2026"
+      "description": "Check whether a submitted order went through: successful | pending (check again) | action_required (user mu…"
     },
     {
       "name": "get_receipt",
@@ -131,7 +131,7 @@
     },
     {
       "name": "list_promos",
-      "description": "Campaign promos eligible at a store for this user (may be empty \u2014 that's normal)."
+      "description": "Campaign promos eligible at a store for this user (may be empty — that's normal)."
     },
     {
       "name": "apply_promo",
@@ -143,11 +143,11 @@
     },
     {
       "name": "find_stores",
-      "description": "Discover NON-restaurant stores near the default address (16-mile radius): grocery (default), alcohol, conve\u2026"
+      "description": "Discover NON-restaurant stores near the default address (16-mile radius): grocery (default), alcohol, conve…"
     },
     {
       "name": "find_items",
-      "description": "Search items inside ONE retail/grocery store by name \u2014 returns item_ids for cart adds, keyed per query."
+      "description": "Search items inside ONE retail/grocery store by name — returns item_ids for cart adds, keyed per query."
     },
     {
       "name": "get_grocery_item_details",
@@ -155,7 +155,11 @@
     },
     {
       "name": "build_grocery_list",
-      "description": "Resolve a grocery/pantry list to real products at one store (raw ingredients only \u2014 NOT restaurant food)."
+      "description": "Resolve a grocery/pantry list to real products at one store (raw ingredients only — NOT restaurant food)."
+    },
+    {
+      "name": "start_signin",
+      "description": "Fix a broken DoorDash sign-in WITHOUT sending the user to a terminal."
     },
     {
       "name": "save_preference",
@@ -163,7 +167,7 @@
     },
     {
       "name": "remove_preference",
-      "description": "Delete a saved preference note (exact text match)."
+      "description": "Delete one saved user preference when the user retracts or reverses it ('actually, mushrooms are fine now',…"
     }
   ],
   "compatibility": {

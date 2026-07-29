@@ -62,6 +62,7 @@ const INSTRUCTIONS = `Peckish orders food on DoorDash for the signed-in user. Op
 - PRIORITY (express) DELIVERY: preview with priority and confirm quote.delivery_availability.delivery_options[] has delivery_option_type "PRIORITY" before promising; delivery-only, not with pickup/scheduled; same flag at submit.
 - CREDITS: apply by default — never prompt; only pass no_apply_credits (preview AND submit) when the user explicitly opts out.
 - Enterprise chains (Domino's, Sweetgreen, …) are orderable; still skip is_link_out stores.
+- SIGN-IN: when a tool fails with "sign-in is missing or expired", offer start_signin — after the user approves a confirmation dialog it opens the DoorDash sign-in in their browser and polls until it completes (call again on login_in_progress; it never opens a second window). Then retry what failed. Only point at running \`dd-cli login\` manually if they decline or the dialog is unavailable.
 - Start sessions by calling get_session_context (address, saved dietary preferences, local time) and honor saved preferences; save new durable ones with save_preference.
 - No popularity data exists; distances are meters (÷1609 for miles); is_link_out stores can't be ordered here; age-restricted carts need get_checkout_url.`;
 
@@ -158,7 +159,7 @@ async function getSessionContext(): Promise<string> {
   return JSON.stringify({
     default_address: def
       ? { label: def.label, printable_address: def.printable_address, is_default: true }
-      : "unknown — dd-cli sign-in may be needed (run `dd-cli login` in a terminal)",
+      : "unknown — DoorDash sign-in may be needed (offer the start_signin tool; manual fallback: `dd-cli login` in a terminal)",
     saved_preferences: listPreferences(),
     preferences_file: preferencesFilePath(),
     local_time: new Date().toLocaleString("en-US", {

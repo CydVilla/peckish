@@ -118,8 +118,11 @@ peckish-web     # web app → open http://localhost:4747
 ```
 
 On boot Peckish verifies your DoorDash sign-in, shows your default delivery
-address, and flags any open carts you forgot about. If sign-in expired, run
-`dd-cli login` again and restart.
+address, and flags any open carts you forgot about. If sign-in is missing or
+expired, Peckish offers to fix it for you: the terminal asks before launching
+`dd-cli login` (which opens your browser), the web app shows a sign-in card,
+and mid-conversation the agent can offer the same assist on any surface — you
+approve, sign in in the browser, and it picks up where it left off.
 
 ### 4. Or run it inside Claude — no API key
 
@@ -204,8 +207,8 @@ the client chooses and pays for the model.)
 
 | Symptom | Fix |
 |---|---|
-| `DoorDash sign-in is missing or expired` | Run `dd-cli login` in a terminal, restart Peckish |
-| Auth errors right after upgrading dd-cli | New CLI versions can need fresh scopes — run `dd-cli login` again |
+| `DoorDash sign-in is missing or expired` | Accept the built-in sign-in assist (it runs `dd-cli login` for you), or run it in a terminal yourself |
+| Auth errors right after upgrading dd-cli | New CLI versions can need fresh scopes — sign in again (assist or `dd-cli login`) |
 | `Anthropic authentication failed` | `export ANTHROPIC_API_KEY=…` in the same shell, restart |
 | `dd-cli binary not found` | Install dd-cli (step 1) or set `DD_CLI_PATH=/path/to/dd-cli` |
 | Web app port in use | `PECKISH_PORT=5757 peckish-web` |

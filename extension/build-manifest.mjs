@@ -5,8 +5,12 @@
  *
  *   node build-manifest.mjs        (after `npm run build` at the repo root)
  */
-import { writeFileSync } from "node:fs";
-import { tools } from "peckish/dist/tools.js";
+import { readFileSync, writeFileSync } from "node:fs";
+// Relative import on purpose: the manifest must reflect the repo's freshly
+// built tool layer, not whatever peckish version extension/node_modules holds.
+import { tools } from "../dist/tools.js";
+
+const { version } = JSON.parse(readFileSync(new URL("./package.json", import.meta.url), "utf8"));
 
 /**
  * The MCP surface exposes one tool beyond the shared tool layer (mcp.ts adds
@@ -30,7 +34,7 @@ const manifest = {
   manifest_version: "0.3",
   name: "peckish",
   display_name: "Peckish — DoorDash ordering",
-  version: "0.3.0",
+  version,
   description: "Order food on DoorDash from Claude — you approve every order.",
   long_description:
     "Peckish gives Claude real DoorDash ordering: it searches stores, compares " +

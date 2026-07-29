@@ -7,6 +7,7 @@ import assert from "node:assert/strict";
 import { stripUiFields, isTransient, formatIntent, DdCliError } from "../src/ddcli.js";
 import { tools, strictifySchema, trimMenuItem } from "../src/tools.js";
 import { addUsage, EMPTY_USAGE, estimateCostUsd, formatCost } from "../src/costs.js";
+import { isAuthError } from "../src/signin.js";
 
 // ---------------------------------------------------------------------------
 // ddcli: envelope sanitization
@@ -60,6 +61,28 @@ test("isTransient never retries auth or missing-binary errors", () => {
 test("isTransient matches timeouts and 5xx", () => {
   assert.equal(isTransient(new DdCliError("dd-cli timed out after 90s")), true);
   assert.equal(isTransient(new DdCliError("dd-cli exited with an error", "HTTP 503 upstream")), true);
+});
+
+// ---------------------------------------------------------------------------
+// signin: auth-failure classification (drives the sign-in assist)
+// ---------------------------------------------------------------------------
+
+test("isAuthError matches only the wrapper's auth failure", () => {
+  assert.equal(
+    isAuthError(new DdCliError("DoorDash sign-in is missing or expired. The user must run `dd-cli login`…")),
+    true,
+  );
+  assert.equal(isAuthError(new DdCliError("dd-cli binary not found (looked for: x)")), false);
+  assert.equal(isAuthError(new DdCliError("dd-cli timed out after 90s")), false);
+  assert.equal(isAuthError(new Error("sign-in is missing or expired")), false, "must be a DdCliError");
+});
+
+test("start_signin tool exists, takes no inputs beyond intent, and is strict", () => {
+  const t = tools.find((x) => x.name === "start_signin");
+  assert.ok(t, "start_signin tool missing");
+  const schema = t!.input_schema as any;
+  assert.deepEqual(Object.keys(schema.properties), ["intent"]);
+  assert.deepEqual(schema.required, ["intent"]);
 });
 
 // ---------------------------------------------------------------------------

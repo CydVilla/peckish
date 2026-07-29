@@ -36,6 +36,7 @@ import {
   type SavedAddress,
 } from "./ddcli.js";
 import { setConfirmationProviders } from "./confirm.js";
+import { isAuthError, launchLogin, probeSignin } from "./signin.js";
 import { logEvent } from "./logger.js";
 import { listPreferences } from "./prefs.js";
 import { formatCost } from "./costs.js";
@@ -275,7 +276,28 @@ const server = createServer(async (req, res) => {
         busy,
         session_cost: formatCost(getSessionUsage().costUsd),
         dd_cli: resolveDdCliPath(),
+        needs_signin: needsSignin,
       });
+    }
+
+    // Sign-in assist: the button click IS the user's approval to launch
+    // `dd-cli login` (opens their browser); the page then polls status.
+    if (req.method === "POST" && url.pathname === "/api/signin") {
+      launchLogin();
+      return json(res, 202, { started: true });
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/signin-status") {
+      try {
+        const signedIn = await probeSignin();
+        if (signedIn && needsSignin) await completeBoot();
+        return json(res, 200, { signed_in: signedIn });
+      } catch (err) {
+        return json(res, 200, {
+          signed_in: false,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
     }
 
     if (req.method === "GET" && url.pathname === "/api/stream") {
@@ -348,18 +370,30 @@ const server = createServer(async (req, res) => {
 // Boot
 // ---------------------------------------------------------------------------
 
-try {
+let needsSignin = false;
+
+async function completeBoot(): Promise<void> {
   const [def, carts] = await Promise.all([getDefaultAddress(), openCartsLine()]);
   addressLine = formatAddress(def);
   bootCartsLine = carts;
+  needsSignin = false;
   console.log(`✓ DoorDash sign-in ok${addressLine ? ` (${addressLine})` : ""}`);
   if (carts !== "none" && carts !== "unknown") console.log(`  open carts: ${carts}`);
+}
+
+try {
+  await completeBoot();
 } catch (err) {
   if (err instanceof DdCliError) {
     console.error(`✗ ${err.message}`);
-    process.exit(1);
+    // Auth failures are recoverable in the page (sign-in card → /api/signin);
+    // anything else (missing binary etc.) still refuses to boot.
+    if (!isAuthError(err)) process.exit(1);
+    needsSignin = true;
+    console.error("  serving anyway — the page will offer DoorDash sign-in");
+  } else {
+    throw err;
   }
-  throw err;
 }
 
 server.listen(PORT, "127.0.0.1", () => {
