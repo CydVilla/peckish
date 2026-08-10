@@ -46,7 +46,7 @@ lines.push(
 lines.push(`| Mac app | download \`Peckish-${version}-arm64.dmg\` below (unsigned — right-click → Open the first time) |`);
 lines.push("");
 lines.push(
-  "Requires DoorDash's [dd-cli](https://github.com/doordash-oss/doordash-cli) signed in on your Mac. If dd-cli was upgraded, re-run `dd-cli login`.",
+  "Requires DoorDash's [dd-cli](https://github.com/doordash-oss/doordash-cli) signed in on your own machine — macOS (Apple Silicon) or Linux x86_64, which needs dd-cli ≥ 0.2.2. If dd-cli was upgraded, re-run `dd-cli login` (or `dd-cli export-token` for a headless host).",
   "",
 );
 

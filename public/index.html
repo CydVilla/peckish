@@ -213,7 +213,7 @@
   <div id="chat"><div class="inner" id="feed">
     <div class="signin-card" id="signin-card" style="display:none">
       <div class="t">DoorDash sign-in needed</div>
-      <div class="d">Your DoorDash session is missing or expired. Peckish can open the
+      <div class="d" id="signin-desc">Your DoorDash session is missing or expired. Peckish can open the
         DoorDash sign-in in your browser — finish it there and this page picks it up
         automatically.</div>
       <button id="signin-btn">Sign in with DoorDash</button>
@@ -602,7 +602,13 @@ async function pollSignin() {
 signinBtn.onclick = async () => {
   signinBtn.disabled = true;
   signinStatus.textContent = "waiting for the browser sign-in to finish…";
-  await fetch("/api/signin", { method: "POST" });
+  const r = await (await fetch("/api/signin", { method: "POST" })).json();
+  if (!r.started) {
+    // Browserless host — a login child would never complete; show the fix.
+    signinStatus.textContent = r.reason || "browser sign-in is unavailable here";
+    signinBtn.disabled = false;
+    return;
+  }
   if (!signinTimer) signinTimer = setInterval(pollSignin, 3000);
 };
 
@@ -612,7 +618,14 @@ fetch("/api/state").then((r) => r.json()).then((s) => {
   document.getElementById("chip-model").textContent = s.model + " @ " + (s.effort || "medium");
   document.getElementById("chip-cost").textContent = (s.session_cost || "<$0.01") + " session";
   if (s.busy) setBusy(true);
-  if (s.needs_signin) signinCard.style.display = "block";
+  if (s.needs_signin) {
+    // No browser here (headless Linux): the button can't help, the hint can.
+    if (s.browser_signin === false) {
+      document.getElementById("signin-desc").textContent = s.signin_hint;
+      signinBtn.style.display = "none";
+    }
+    signinCard.style.display = "block";
+  }
 });
 </script>
 </body>

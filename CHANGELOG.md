@@ -9,6 +9,19 @@ file's section for that version, every downloadable artifact, and a
 ## [Unreleased]
 
 ### Added
+- **Linux (x86_64) support**, following dd-cli v0.2.2's Linux builds. The
+  terminal, web and MCP surfaces all run on Linux — same tools, same order
+  gate, same audit log. dd-cli is discovered at `~/.local/bin/dd-cli`,
+  `/usr/local/bin/dd-cli`, `DD_CLI_PATH`, or `PATH`. (The `.dmg` remains the
+  one Mac-only surface.)
+- **Browserless sign-in** for containers, VMs and cloud sandboxes: where
+  `dd-cli login` can't complete, Peckish stops offering it — no spawned login
+  that hangs, no advice that can't work — and tells you to mint a token with
+  `dd-cli export-token` on a machine with a browser and pass it in as
+  `DD_CLI_ACCESS_TOKEN`. The agent gets the same guidance on every surface, and
+  a set-but-rejected token is reported as stale rather than missing.
+- Unsupported platforms (Intel Macs, Linux arm64) now say so — "no dd-cli
+  build" — instead of failing with an obscure missing-binary error.
 - **Sign-in assist**: when DoorDash sign-in is missing or expired, Peckish now
   offers to fix it instead of sending you to a terminal. The terminal app asks
   before launching `dd-cli login` (which opens your browser) and waits for it;
@@ -16,6 +29,11 @@ file's section for that version, every downloadable artifact, and a
   `start_signin` tool lets the agent offer the same assist mid-conversation on
   every surface — always behind an explicit approval prompt, and it never
   opens a second sign-in window while one is pending.
+
+### Changed
+- The Claude Desktop extension now declares `["darwin", "linux"]` compatibility
+  (dd-cli ships builds for both), and its docs no longer claim a Mac is
+  required.
 
 ### Fixed
 - The extension manifest's version is now read from `extension/package.json`

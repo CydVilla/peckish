@@ -8,6 +8,13 @@ import { stripUiFields, isTransient, formatIntent, DdCliError } from "../src/ddc
 import { tools, strictifySchema, trimMenuItem } from "../src/tools.js";
 import { addUsage, EMPTY_USAGE, estimateCostUsd, formatCost } from "../src/costs.js";
 import { isAuthError } from "../src/signin.js";
+import {
+  platformId,
+  ddCliAsset,
+  canBrowserSignin,
+  signinHint,
+  installHint,
+} from "../src/platform.js";
 
 // ---------------------------------------------------------------------------
 // ddcli: envelope sanitization
@@ -77,12 +84,64 @@ test("isAuthError matches only the wrapper's auth failure", () => {
   assert.equal(isAuthError(new Error("sign-in is missing or expired")), false, "must be a DdCliError");
 });
 
+test("the headless variant of the auth message stays classified as auth", () => {
+  // ddcli.ts builds this message; both classifiers must survive the new suffix.
+  const err = new DdCliError(`DoorDash sign-in is missing or expired. ${signinHint({}, "linux")}`);
+  assert.equal(isAuthError(err), true);
+  assert.equal(isTransient(err), false, "auth failures must never auto-retry");
+});
+
 test("start_signin tool exists, takes no inputs beyond intent, and is strict", () => {
   const t = tools.find((x) => x.name === "start_signin");
   assert.ok(t, "start_signin tool missing");
   const schema = t!.input_schema as any;
   assert.deepEqual(Object.keys(schema.properties), ["intent"]);
   assert.deepEqual(schema.required, ["intent"]);
+});
+
+// ---------------------------------------------------------------------------
+// platform: dd-cli targets and the browser-vs-token sign-in split
+// ---------------------------------------------------------------------------
+
+test("platformId only claims the two targets dd-cli builds for", () => {
+  assert.equal(platformId("darwin", "arm64"), "darwin-arm64");
+  assert.equal(platformId("linux", "x64"), "linux-amd64");
+  assert.equal(platformId("linux", "arm64"), "unsupported", "no linux-arm64 dd-cli build");
+  assert.equal(platformId("darwin", "x64"), "unsupported", "no Intel Mac dd-cli build");
+  assert.equal(platformId("win32", "x64"), "unsupported");
+});
+
+test("ddCliAsset names the real release assets", () => {
+  assert.equal(ddCliAsset("0.2.2", "linux-amd64"), "dd-cli-v0.2.2-linux-amd64.tar.gz");
+  assert.equal(ddCliAsset("0.2.2", "darwin-arm64"), "dd-cli-v0.2.2-darwin-arm64.tar.gz");
+  assert.equal(ddCliAsset("0.2.2", "unsupported"), null);
+});
+
+test("canBrowserSignin: macOS always, Linux only with a display", () => {
+  assert.equal(canBrowserSignin({}, "darwin"), true);
+  assert.equal(canBrowserSignin({}, "linux"), false, "headless container has no browser");
+  assert.equal(canBrowserSignin({ DISPLAY: ":0" }, "linux"), true);
+  assert.equal(canBrowserSignin({ WAYLAND_DISPLAY: "wayland-0" }, "linux"), true);
+});
+
+test("signinHint routes each environment to the fix that actually works", () => {
+  assert.match(signinHint({}, "darwin"), /dd-cli login/);
+  const headless = signinHint({}, "linux");
+  assert.match(headless, /export-token/);
+  assert.match(headless, /DD_CLI_ACCESS_TOKEN/);
+  // login may be named, but only to rule it out — never as the fix.
+  assert.match(headless, /`dd-cli login` cannot complete here/);
+  assert.doesNotMatch(headless, /must run `dd-cli login`/);
+  // A token that is set but rejected is a stale token, not a missing one.
+  const stale = signinHint({ DD_CLI_ACCESS_TOKEN: "tok" }, "linux");
+  assert.match(stale, /invalid or expired/);
+  assert.match(stale, /export-token/);
+});
+
+test("installHint points at the current platform's asset", () => {
+  assert.match(installHint("linux-amd64"), /dd-cli-v<version>-linux-amd64\.tar\.gz/);
+  assert.match(installHint("darwin-arm64"), /dd-cli-v<version>-darwin-arm64\.tar\.gz/);
+  assert.match(installHint("unsupported"), /no dd-cli build/);
 });
 
 // ---------------------------------------------------------------------------

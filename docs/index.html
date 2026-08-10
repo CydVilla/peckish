@@ -147,7 +147,7 @@
 <section id="install">
   <div class="wrap">
     <h2>Four ways to run it</h2>
-    <p class="lede">Everything runs on your own Mac. Pick the surface that fits you.</p>
+    <p class="lede">Everything runs on your own machine — a Mac with Apple Silicon or Linux x86_64. Pick the surface that fits you.</p>
 
     <div class="cards">
       <div class="card">
@@ -226,9 +226,13 @@
     <div class="note">
       <p style="margin:0 0 10px"><b>You need three things:</b></p>
       <p style="margin:0 0 10px">
-        <b>1. A Mac with Apple Silicon.</b> Peckish is local-first — your Mac is
-        the backend on every surface, because DoorDash sign-in lives in your
-        keychain. There's no hosted version, and that's deliberate.
+        <b>1. A Mac with Apple Silicon, or Linux x86_64.</b> Peckish is
+        local-first — your own machine is the backend on every surface, because
+        that's where dd-cli holds your DoorDash sign-in. There's no hosted
+        version, and that's deliberate. On Linux (dd-cli 0.2.2+), including
+        containers and cloud sandboxes with no browser, you sign in once with
+        <code>dd-cli export-token</code> elsewhere and pass the token in as
+        <code>DD_CLI_ACCESS_TOKEN</code>.
       </p>
       <p style="margin:0 0 10px">
         <b>2. DoorDash CLI access.</b> Peckish is built on DoorDash's official
