@@ -11,10 +11,12 @@ import { execFile } from "node:child_process";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { existsSync } from "node:fs";
+import { installHint, signinHint } from "./platform.js";
 
 const CANDIDATE_PATHS = [
   process.env.DD_CLI_PATH,
-  join(homedir(), ".local", "bin", "dd-cli"),
+  join(homedir(), ".local", "bin", "dd-cli"), // install.sh's target on macOS and Linux
+  "/usr/local/bin/dd-cli", // container images that drop the binary in system-wide
   "dd-cli", // rely on PATH as last resort
 ].filter((p): p is string => Boolean(p));
 
@@ -65,21 +67,18 @@ function execDd(args: string[]): Promise<{ stdout: string; stderr: string }> {
         if (err) {
           const detail = `${stdout}\n${stderr}`.trim();
           if (
-            /missing credentials|sign in with dd-cli login|token has expired|failed to authenticate|try running dd-cli login/i.test(
+            /missing credentials|sign in with dd-cli login|token has expired|failed to authenticate|try running dd-cli login|DD_CLI_ACCESS_TOKEN|invalid access token/i.test(
               detail,
             )
           ) {
+            // The fix differs per environment: browser login on a desktop,
+            // an injected DD_CLI_ACCESS_TOKEN in a headless container.
             reject(
-              new DdCliError(
-                "DoorDash sign-in is missing or expired. The user must run `dd-cli login` in a separate terminal, then retry.",
-                detail,
-              ),
+              new DdCliError(`DoorDash sign-in is missing or expired. ${signinHint()}`, detail),
             );
           } else if ((err as NodeJS.ErrnoException).code === "ENOENT") {
             reject(
-              new DdCliError(
-                `dd-cli binary not found (looked for: ${DD_CLI}). Install it and/or set DD_CLI_PATH.`,
-              ),
+              new DdCliError(`dd-cli binary not found (looked for: ${DD_CLI}). ${installHint()}`),
             );
           } else if (err.killed) {
             reject(new DdCliError(`dd-cli timed out after ${TIMEOUT_MS / 1000}s`, detail));

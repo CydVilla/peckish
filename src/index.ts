@@ -23,6 +23,7 @@ import {
 } from "./agent.js";
 import { getDefaultAddress, openCartsLine, DdCliError, resolveDdCliPath } from "./ddcli.js";
 import { isAuthError, launchLogin, waitForSignin } from "./signin.js";
+import { canBrowserSignin, platformId, signinHint } from "./platform.js";
 import { registerTerminalProviders } from "./confirm.js";
 import { listPreferences, preferencesFilePath } from "./prefs.js";
 import { formatCost } from "./costs.js";
@@ -54,15 +55,24 @@ async function preflight(): Promise<string | null> {
 /**
  * Boot-time sign-in assist: offer to launch `dd-cli login` (opens the
  * browser) and poll until it works. Returns true once signed in.
+ *
+ * On a browserless host there is nothing to offer, so don't prompt for a flow
+ * that cannot complete — the caller has already printed the failure, whose
+ * message carries the DD_CLI_ACCESS_TOKEN instructions for exactly this case.
  */
 async function offerSigninAssist(): Promise<boolean> {
+  if (!canBrowserSignin()) return false;
   const rl = createInterface({ input: process.stdin, output: process.stdout });
   const answer = await new Promise<string>((resolve) =>
     rl.question("Open the DoorDash sign-in in your browser now? [Y/n] ", resolve),
   );
   rl.close();
   if (["n", "no"].includes(answer.trim().toLowerCase())) return false;
-  launchLogin();
+  const launch = launchLogin();
+  if (!launch.started) {
+    console.error(dim(launch.reason ?? "browser sign-in is unavailable here"));
+    return false;
+  }
   process.stdout.write(dim("waiting for you to finish signing in in the browser "));
   const res = await waitForSignin({ onTick: () => process.stdout.write(dim(".")) });
   process.stdout.write("\n");
@@ -91,7 +101,9 @@ async function preflightWithAssist(): Promise<string | null> {
 async function main(): Promise<void> {
   console.log(
     bold("\n🍜 Peckish") +
-      dim(`  ·  ${MODEL} @ ${EFFORT} effort  ·  dd-cli @ ${resolveDdCliPath()}`),
+      dim(
+        `  ·  ${MODEL} @ ${EFFORT} effort  ·  dd-cli @ ${resolveDdCliPath()}  ·  ${platformId()}`,
+      ),
   );
   process.stdout.write(dim("checking DoorDash sign-in… "));
   // Sequential on purpose: the sign-in assist may run interactively between

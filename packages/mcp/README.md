@@ -42,15 +42,22 @@ Claude Desktop users can also install the double-click
 
 ## Requirements
 
-- **A Mac with Apple Silicon** — Peckish is local-first; your machine is the
-  backend, because DoorDash sign-in lives in your keychain.
+- **A Mac with Apple Silicon, or Linux x86_64** — the platforms dd-cli builds
+  for. Peckish is local-first; your machine is the backend, because that's
+  where dd-cli holds your DoorDash sign-in.
 - **Node.js 20+**
 - **DoorDash CLI access** (currently waitlist-gated by DoorDash). Install
   [`dd-cli`](https://github.com/doordash-oss/doordash-cli), verify the
-  published SHA256, run `bash install.sh`, then `dd-cli login`.
+  published SHA256, run `bash install.sh`, then `dd-cli login`. Linux needs
+  **dd-cli ≥ 0.2.2** (its first Linux release).
 
 Set `DD_CLI_PATH` if `dd-cli` isn't at `~/.local/bin/dd-cli` — GUI apps don't
 inherit your shell `PATH`.
+
+On a headless host (container, VM, cloud sandbox) there's no browser for
+`dd-cli login`: run `dd-cli export-token` on a machine that has one and set
+`DD_CLI_ACCESS_TOKEN` in this server's environment instead. That token is live
+DoorDash account access — keep it in a secret store, not an image layer.
 
 ## Safety model
 

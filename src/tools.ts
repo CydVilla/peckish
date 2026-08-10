@@ -11,6 +11,7 @@ import { ddJson, ddBeautify, getDefaultAddress, DdCliError } from "./ddcli.js";
 import { addPreference, removePreference, listPreferences } from "./prefs.js";
 import { confirmOrderPlacement, confirmAction } from "./confirm.js";
 import { probeSignin, launchLogin, loginInProgress, waitForSignin } from "./signin.js";
+import { canBrowserSignin, signinHint } from "./platform.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -483,6 +484,14 @@ export const toolHandlers: Record<string, Handler> = {
       return j({ signed_in: true, note: "Sign-in already works — retry the request that failed." });
     }
     if (!loginInProgress()) {
+      // Nothing to approve on a browserless host — say what actually works.
+      if (!canBrowserSignin()) {
+        return j({
+          started: false,
+          browser_signin_unavailable: true,
+          note: signinHint(),
+        });
+      }
       const ok = await confirmAction(
         "DoorDash sign-in is missing or expired. Open the DoorDash sign-in flow in your browser now (runs `dd-cli login` locally)?",
       );
@@ -493,7 +502,10 @@ export const toolHandlers: Record<string, Handler> = {
           note: "Sign-in was not approved on this surface. Ask the user to run `dd-cli login` in a terminal themselves, then retry the original request.",
         });
       }
-      launchLogin();
+      const launch = launchLogin();
+      if (!launch.started) {
+        return j({ started: false, browser_signin_unavailable: true, note: launch.reason });
+      }
     }
     const res = await waitForSignin({ timeoutMs: 45_000, intervalMs: 3_000 });
     if (res.signedIn) {
@@ -926,7 +938,7 @@ const RAW_TOOLS: Anthropic.Tool[] = [
   {
     name: "start_signin",
     description:
-      "Fix a broken DoorDash sign-in WITHOUT sending the user to a terminal. Call when a tool fails with 'sign-in is missing or expired' AND the user wants to continue: after they approve a confirmation prompt, this launches `dd-cli login` (opens their browser) and polls until the sign-in works, up to ~45s per call. If it returns login_in_progress, call it again to keep waiting — repeat calls never open a second window. On signed_in, retry the request that originally failed.",
+      "Fix a broken DoorDash sign-in WITHOUT sending the user to a terminal. Call when a tool fails with 'sign-in is missing or expired' AND the user wants to continue: after they approve a confirmation prompt, this launches `dd-cli login` (opens their browser) and polls until the sign-in works, up to ~45s per call. If it returns login_in_progress, call it again to keep waiting — repeat calls never open a second window. On signed_in, retry the request that originally failed. On browser_signin_unavailable (headless Linux container/VM: no browser to sign in with) do NOT call it again — relay its note, which tells the user how to inject a DD_CLI_ACCESS_TOKEN instead.",
     input_schema: { type: "object", properties: {}, required: [] },
   },
   {

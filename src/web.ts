@@ -2,8 +2,9 @@
 /**
  * Peckish web — a local web chat UI over the same agent + tool layer.
  *
- * Single-user, localhost-only by design: your Mac is the backend (dd-cli auth
- * lives in your keychain). The browser gets an SSE stream of the turn
+ * Single-user, localhost-only by design: your own machine is the backend (Mac
+ * or Linux — dd-cli holds the DoorDash session, whether that's the macOS
+ * keychain or an injected token). The browser gets an SSE stream of the turn
  * (text deltas, tool activity, result cards, usage/cost) and renders the order
  * gate as a modal — approving it resolves the same confirmation providers the
  * terminal uses. A Stop button aborts the running turn (history rolls back).
@@ -37,6 +38,7 @@ import {
 } from "./ddcli.js";
 import { setConfirmationProviders } from "./confirm.js";
 import { isAuthError, launchLogin, probeSignin } from "./signin.js";
+import { canBrowserSignin, platformId, signinHint } from "./platform.js";
 import { logEvent } from "./logger.js";
 import { listPreferences } from "./prefs.js";
 import { formatCost } from "./costs.js";
@@ -276,15 +278,20 @@ const server = createServer(async (req, res) => {
         busy,
         session_cost: formatCost(getSessionUsage().costUsd),
         dd_cli: resolveDdCliPath(),
+        platform: platformId(),
         needs_signin: needsSignin,
+        // The card offers a button only where a browser sign-in can finish;
+        // elsewhere it shows the token instructions instead.
+        browser_signin: canBrowserSignin(),
+        signin_hint: signinHint(),
       });
     }
 
     // Sign-in assist: the button click IS the user's approval to launch
     // `dd-cli login` (opens their browser); the page then polls status.
     if (req.method === "POST" && url.pathname === "/api/signin") {
-      launchLogin();
-      return json(res, 202, { started: true });
+      const launch = launchLogin();
+      return json(res, launch.started ? 202 : 200, launch);
     }
 
     if (req.method === "GET" && url.pathname === "/api/signin-status") {
@@ -390,7 +397,11 @@ try {
     // anything else (missing binary etc.) still refuses to boot.
     if (!isAuthError(err)) process.exit(1);
     needsSignin = true;
-    console.error("  serving anyway — the page will offer DoorDash sign-in");
+    console.error(
+      canBrowserSignin()
+        ? "  serving anyway — the page will offer DoorDash sign-in"
+        : "  serving anyway — the page will show how to sign in without a browser",
+    );
   } else {
     throw err;
   }

@@ -72,10 +72,11 @@ check(
   "extension/manifest.json is missing get_session_context (added by mcp.ts, not tools.ts)",
 );
 
-// dd-cli ships darwin-arm64 only — claiming other platforms would strand users.
+// dd-cli ships darwin-arm64 and linux-amd64 (Linux since v0.2.2) — claiming
+// any other platform would strand users on an OS with no dd-cli build.
 check(
-  JSON.stringify(manifest.compatibility.platforms) === JSON.stringify(["darwin"]),
-  `extension manifest platforms should be ["darwin"] — got ${JSON.stringify(manifest.compatibility.platforms)}`,
+  JSON.stringify(manifest.compatibility.platforms) === JSON.stringify(["darwin", "linux"]),
+  `extension manifest platforms should be ["darwin", "linux"] — got ${JSON.stringify(manifest.compatibility.platforms)}`,
 );
 
 // Releases must ship with curated notes: the version being released needs its

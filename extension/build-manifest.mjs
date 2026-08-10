@@ -44,9 +44,9 @@ const manifest = {
     "Claude must first show the itemized quote, confirm the Dasher tip, and name " +
     "the card being charged. Submission never auto-retries, and every tool call " +
     "and confirmation is logged to ~/.peckish/logs/.\n\n" +
-    "Requires a Mac with Apple Silicon and DoorDash's dd-cli (waitlist-gated), " +
-    "signed in via `dd-cli login`. No Anthropic API key needed — your Claude " +
-    "subscription powers the model.",
+    "Requires DoorDash's dd-cli (waitlist-gated) on a Mac with Apple Silicon or " +
+    "Linux x86_64, signed in via `dd-cli login`. No Anthropic API key needed — " +
+    "your Claude subscription powers the model.",
   author: {
     name: "Cyd Villavicencio",
     url: "https://github.com/CydVilla",
@@ -88,7 +88,8 @@ const manifest = {
   ],
   compatibility: {
     claude_desktop: ">=0.10.0",
-    platforms: ["darwin"],
+    // dd-cli ships darwin-arm64 and linux-amd64 builds (Linux since v0.2.2).
+    platforms: ["darwin", "linux"],
     runtimes: { node: ">=20.0.0" },
   },
 };

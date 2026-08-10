@@ -45,8 +45,10 @@ npm install -g peckish
 **Prefer an app?** Download the
 [Mac app (.dmg)](https://github.com/CydVilla/peckish/releases/latest) —
 guided setup, no terminal at any step. See [Mac app](#mac-app) below.
-Everything runs on your own Mac either way, because DoorDash sign-in lives
-in your keychain.
+Everything runs on your own machine either way, because dd-cli holds your
+DoorDash session there — a Mac (Apple Silicon) or Linux x86_64, including
+containers and cloud sandboxes: see
+[Linux, containers and headless hosts](#linux-containers-and-headless-hosts).
 
 ```
 you › Find me a high-protein dinner under $25 that can arrive within 45
@@ -70,18 +72,27 @@ ending 1234. Suggested Dasher tip is $3.50 — that, another amount, or none?
 
 ### 1. Prerequisites
 
-- **A Mac with Apple Silicon** (M1–M4). Peckish is local-first: your Mac is the
-  backend on every surface, because dd-cli authenticates against your keychain.
+- **A Mac with Apple Silicon** (M1–M4) **or Linux x86_64** — the two platforms
+  dd-cli publishes builds for. Peckish is local-first: whichever machine you
+  run it on is the backend on every surface, because that's where dd-cli holds
+  your DoorDash session.
 - **Node.js 20+** — `node --version` to check; install from nodejs.org or brew.
 - **DoorDash CLI access** (currently waitlist-gated by DoorDash). Peckish
-  0.4.0 requires **dd-cli ≥ 0.2.1**. Download the release from
+  0.4.0 requires **dd-cli ≥ 0.2.1** — on Linux, **≥ 0.2.2**, the first release
+  with Linux builds. Download the release from
   [doordash-oss/doordash-cli](https://github.com/doordash-oss/doordash-cli/releases),
   **verify the SHA256 checksum against the published value**, then:
   ```sh
+  # macOS (Apple Silicon)
   tar -xzf dd-cli-v*-darwin-arm64.tar.gz && cd dd-cli-v*-darwin-arm64
-  bash install.sh          # installs to ~/.local/bin/dd-cli
-  dd-cli login             # sign in to DoorDash in your browser (stored in keychain)
+  # Linux (x86_64)
+  tar -xzf dd-cli-v*-linux-amd64.tar.gz && cd dd-cli-v*-linux-amd64
+
+  bash install.sh          # both platforms — installs to ~/.local/bin/dd-cli
+  dd-cli login             # sign in to DoorDash in your browser
   ```
+  No browser on that machine (container, VM, cloud sandbox)? See
+  [Linux, containers and headless hosts](#linux-containers-and-headless-hosts).
 - **An Anthropic API key** for the terminal/web surfaces
   ([console.anthropic.com](https://console.anthropic.com)) — *or skip the key
   entirely and use the MCP surface with your Claude subscription (step 4).*
@@ -102,7 +113,7 @@ That's it — you now have three commands: `peckish` (terminal chat),
 git clone https://github.com/CydVilla/peckish.git
 cd peckish
 npm install
-npm test          # optional: 13 unit tests, no network needed
+npm test          # optional: 25 unit tests, no network needed
 npm run dev       # terminal chat (or: npm run web / npm run mcp)
 ```
 
@@ -122,7 +133,9 @@ address, and flags any open carts you forgot about. If sign-in is missing or
 expired, Peckish offers to fix it for you: the terminal asks before launching
 `dd-cli login` (which opens your browser), the web app shows a sign-in card,
 and mid-conversation the agent can offer the same assist on any surface — you
-approve, sign in in the browser, and it picks up where it left off.
+approve, sign in in the browser, and it picks up where it left off. On a
+machine with no browser, Peckish skips that offer and tells you how to inject
+a token instead — see below.
 
 ### 4. Or run it inside Claude — no API key
 
@@ -208,14 +221,17 @@ the client chooses and pays for the model.)
 | Symptom | Fix |
 |---|---|
 | `DoorDash sign-in is missing or expired` | Accept the built-in sign-in assist (it runs `dd-cli login` for you), or run it in a terminal yourself |
-| Auth errors right after upgrading dd-cli | New CLI versions can need fresh scopes — sign in again (assist or `dd-cli login`) |
+| The same, on a headless Linux box | There's no browser to sign in with: `dd-cli export-token` on a machine that has one, then `DD_CLI_ACCESS_TOKEN=…` here ([details](#linux-containers-and-headless-hosts)) |
+| Auth errors right after upgrading dd-cli | New CLI versions can need fresh scopes — sign in again (assist, `dd-cli login`, or a fresh `export-token`) |
 | `Anthropic authentication failed` | `export ANTHROPIC_API_KEY=…` in the same shell, restart |
 | `dd-cli binary not found` | Install dd-cli (step 1) or set `DD_CLI_PATH=/path/to/dd-cli` |
+| `no dd-cli build` for your machine | dd-cli ships macOS arm64 and Linux x86_64 only — Intel Macs and Linux arm64 can't run Peckish |
 | Web app port in use | `PECKISH_PORT=5757 peckish-web` |
 | A turn ran away | Ctrl+C (terminal) / Stop (web) — history rolls back cleanly |
 
 Env vars: `DD_AGENT_MODEL` (default `claude-sonnet-5`), `DD_AGENT_EFFORT`
-(`low`–`max`, default `medium`), `DD_CLI_PATH`, `PECKISH_PORT` (default `4747`).
+(`low`–`max`, default `medium`), `DD_CLI_PATH`, `PECKISH_PORT` (default `4747`),
+`DD_CLI_ACCESS_TOKEN` (read by dd-cli itself — browserless sign-in).
 
 ---
 
@@ -255,6 +271,56 @@ required (the app bundles its own runtime).
 
 Building it yourself: `cd desktop && npm install && npm run dist` →
 `desktop/dist/Peckish-*.dmg`.
+
+The `.dmg` is the one Mac-only surface. The terminal, web and MCP surfaces all
+run on Linux too:
+
+---
+
+## Linux, containers and headless hosts
+
+dd-cli **v0.2.2** added Linux (amd64) builds, so all three Peckish surfaces run
+on Linux x86_64 unchanged — same tools, same order gate, same audit log.
+Install dd-cli from the same release page (asset
+`dd-cli-v<version>-linux-amd64.tar.gz`, verify its SHA256, `bash install.sh`),
+then `npm install -g peckish`. If you put the binary somewhere other than
+`~/.local/bin/dd-cli`, set `DD_CLI_PATH` — Peckish also checks
+`/usr/local/bin/dd-cli` and your `PATH`.
+
+**With a desktop session** (`DISPLAY` or `WAYLAND_DISPLAY` set), nothing
+changes: `dd-cli login` opens your browser and the built-in sign-in assist
+works exactly as it does on a Mac.
+
+**Without one** — a container, a VM, a cloud sandbox, SSH with no forwarding —
+the browser flow cannot complete, so Peckish stops offering it (no spawned
+login that hangs forever, no "run `dd-cli login`" advice that can't work) and
+points at the token path instead:
+
+```sh
+# 1. on a machine that HAS a browser (dd-cli ≥ 0.2.2)
+dd-cli export-token
+
+# 2. in the environment that runs Peckish
+export DD_CLI_ACCESS_TOKEN='<the token>'
+peckish            # or peckish-web / peckish-mcp
+```
+
+dd-cli picks the token up from the environment Peckish passes down, so every
+surface authenticates without a keychain or a browser.
+
+- **That token is live access to your DoorDash account** — it can place real
+  orders. Treat it like a password: keep it in your runtime's secret store, not
+  in an image layer, a `docker run -e` in your shell history, or a committed
+  `.env`. Mint a fresh one with `dd-cli export-token` when it expires.
+- **The order gate does not change.** Placing an order still needs your
+  explicit approval on the surface you're using (typed `yes`, the web modal, or
+  the MCP dialog) — headless means no browser, not unattended ordering.
+- **`peckish-web` in a container** binds `127.0.0.1` *inside the container* by
+  design, so a published port (`-p 4747:4747`) can't reach it. Run the
+  container with `--network host` (Linux), or use the terminal or MCP surface,
+  which need no port at all.
+- **Not supported:** Linux arm64 and Intel Macs — dd-cli publishes no build for
+  either, and Peckish says so explicitly instead of failing obscurely.
 
 ---
 
@@ -356,10 +422,11 @@ Independent of intent, DoorDash necessarily sees the API traffic itself
 | `src/agent.ts` | System prompt + streaming tool loop (beta: context editing; web_search; usage) |
 | `src/tools.ts` | Tool schemas (strictified) + handlers; menu trimming/filtering |
 | `src/ddcli.ts` | `execFile` wrapper: envelope parsing, UI-field stripping, error mapping, bounded read-only retry |
+| `src/platform.ts` | Supported dd-cli targets + whether sign-in can use a browser here or needs an injected token |
 | `src/confirm.ts` | Pluggable confirmation gates (fail closed) |
 | `src/costs.ts` / `src/logger.ts` | Cost accounting · JSONL audit log |
 | `src/prefs.ts` | Preference persistence (`~/.peckish/`) |
-| `tests/unit.test.ts` | 13 unit tests (`npm test`), no network needed |
+| `tests/unit.test.ts` | 25 unit tests (`npm test`), no network needed |
 | `desktop/` | Electron shell for the Mac app (.dmg): onboarding + server launcher, no agent logic |
 | `packages/mcp/` | The `peckish-mcp` npm package — a launcher so `npx -y peckish-mcp` starts the MCP server |
 | `extension/` | Claude Desktop extension (`.mcpb`): manifest + vendored server. `node build-manifest.mjs && mcpb pack . peckish.mcpb` |
@@ -408,7 +475,7 @@ secrets.
 ## Notes & limitations
 
 - Local-first by design: hosted delivery (SMS bots, voice) would require
-  DoorDash's partner API — your Mac is the backend here.
+  DoorDash's partner API — your own machine is the backend here.
 - One open cart per store (DoorDash rule) — Peckish collision-checks and asks.
 - `payment-method list` sees cards only; wallet defaults (Apple Pay etc.) are
   confirmed generically or via the browser checkout URL.
