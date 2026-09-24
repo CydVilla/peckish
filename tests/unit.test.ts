@@ -4,7 +4,8 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { stripUiFields, isTransient, formatIntent, DdCliError } from "../src/ddcli.js";
+import { stripUiFields, isTransient, formatIntent, findGuestToken, DdCliError } from "../src/ddcli.js";
+import { guestKey } from "../src/guests.js";
 import { tools, strictifySchema, trimMenuItem, carryThrough, carriesSignal } from "../src/tools.js";
 import { addUsage, EMPTY_USAGE, estimateCostUsd, formatCost } from "../src/costs.js";
 import { isAuthError } from "../src/signin.js";
@@ -407,4 +408,54 @@ test("cart adds can express weight-priced items and exact modifications", () => 
 
 test("order history can include group orders", () => {
   assert.ok(propsOf("get_order_history").include_group_order);
+});
+
+// ---------------------------------------------------------------------------
+// guests: the key the store matches on, and the token-finder
+// ---------------------------------------------------------------------------
+
+test("guestKey normalizes case and spacing so one person stays one guest", () => {
+  assert.equal(guestKey("Luke", "Wulf"), "luke wulf");
+  assert.equal(guestKey("  luke ", " WULF  "), "luke wulf");
+  assert.equal(guestKey("Luke", "Wulf"), guestKey("LUKE", "wulf"));
+  assert.notEqual(guestKey("Luke", "Wulf"), guestKey("Luke", "Wolf"));
+});
+
+test("guestKey tolerates a missing half without colliding with another name", () => {
+  assert.equal(guestKey("Prince", ""), "prince");
+  assert.notEqual(guestKey("Prince", ""), guestKey("", "Prince2"));
+});
+
+test("findGuestToken digs the one-time token out of wherever it is nested", () => {
+  assert.equal(findGuestToken({ guest_token: "t1" }), "t1");
+  assert.equal(findGuestToken({ cart: { sub: { guest_token: "t2" } } }), "t2");
+  assert.equal(findGuestToken({ carts: [{ guest_token: "t3" }] }), "t3");
+  assert.equal(findGuestToken({ cart_uuid: "c1" }), null);
+  assert.equal(findGuestToken({ guest_token: "" }), null, "empty is not a token");
+  assert.equal(findGuestToken(null), null);
+});
+
+test("stripUiFields removes guest_token at any depth", () => {
+  const cleaned = stripUiFields({
+    cart_uuid: "c1",
+    guest_cart: { name: "Luke Wulf", guest_token: "gtok_secret" },
+    list: [{ guest_token: "gtok_other" }],
+  });
+  const text = JSON.stringify(cleaned);
+  assert.ok(!text.includes("gtok_secret"));
+  assert.ok(!text.includes("gtok_other"));
+  assert.ok(text.includes("Luke Wulf"), "the guest's name is not the secret");
+});
+
+test("guest sub-cart params are exposed on the cart tool, tokens are not", () => {
+  const add = tools.find((t) => t.name === "add_items_to_cart")!;
+  const props = add.input_schema.properties as Record<string, any>;
+  assert.ok(props.guest_first_name);
+  assert.ok(props.guest_last_name);
+  assert.ok(props.group_cart_url);
+  assert.ok(
+    !JSON.stringify(add.input_schema).includes("guest_token"),
+    "the model must have no way to supply or receive a token",
+  );
+  assert.ok(tools.some((t) => t.name === "list_cart_guests"));
 });

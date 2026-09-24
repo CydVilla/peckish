@@ -12,7 +12,7 @@
  */
 import { test, before, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -24,16 +24,22 @@ const LOG = join(workdir, "argv.log");
 process.env.DD_CLI_PATH = FAKE;
 process.env.FAKE_DD_CLI_LOG = LOG;
 process.env.FAKE_DD_CLI_VERSION = "0.2.5";
+// The guest store, preferences and audit log all hang off the home directory.
+// Point it at the temp workdir before anything imports them.
+process.env.HOME = workdir;
 
 type Tools = typeof import("../src/tools.js");
 type DdCli = typeof import("../src/ddcli.js");
+type Guests = typeof import("../src/guests.js");
 let tools: Tools;
 let ddcli: DdCli;
+let guests: Guests;
 
 before(async () => {
   chmodSync(FAKE, 0o755);
   tools = await import("../src/tools.js");
   ddcli = await import("../src/ddcli.js");
+  guests = await import("../src/guests.js");
 });
 
 process.on("exit", () => rmSync(workdir, { recursive: true, force: true }));
@@ -308,4 +314,169 @@ test("the default address is read once and refreshed when it changes", async () 
   ddcli.invalidateDefaultAddress();
   await run("get_menu", { store_id: "store_1" });
   assert.equal(listCalls(), 2, "and re-read once invalidated");
+});
+
+// ---------------------------------------------------------------------------
+// Guest sub-carts
+//
+// The guest_token is a bearer credential for one person's sub-cart, it is
+// returned exactly once, and dd-cli's guidance is to keep it out of logs and
+// away from humans. Peckish holds it; the model works in names. These tests
+// are as much about the token NOT going anywhere as about the flags.
+// ---------------------------------------------------------------------------
+
+const GUEST_CART = "cart_1";
+const addGuest = (first: string, last: string, cart: string | null = GUEST_CART) =>
+  run("add_items_to_cart", {
+    store_id: "store_1",
+    menu_id: "menu_1",
+    items: [{ item_id: "i_100", item_name: "Tonkotsu Ramen", quantity: 1 }],
+    ...(cart ? { cart_uuid: cart } : {}),
+    guest_first_name: first,
+    guest_last_name: last,
+  });
+
+test("a new guest is introduced by name, and the token never comes back", async () => {
+  guests.forgetCart(GUEST_CART);
+  const res = await addGuest("Luke", "Wulf");
+
+  const sent = JSON.parse(valueOf(callFor("cart", "add-items"), "--guest-json"));
+  assert.deepEqual(sent, { first_name: "Luke", last_name: "Wulf" });
+  assert.equal(res.guest_add, "new guest");
+
+  const serialized = JSON.stringify(res);
+  assert.ok(!serialized.includes("gtok_secret_abc123"), "the token must not reach the model");
+  assert.ok(!serialized.includes("guest_token"), "not even the key");
+});
+
+test("the token is stored and replaces the name on every later add", async () => {
+  guests.forgetCart(GUEST_CART);
+  await addGuest("Luke", "Wulf");
+  assert.equal(guests.guestToken(GUEST_CART, "Luke", "Wulf"), "gtok_secret_abc123");
+
+  reset();
+  const res = await addGuest("Luke", "Wulf");
+  const sent = JSON.parse(valueOf(callFor("cart", "add-items"), "--guest-json"));
+  assert.deepEqual(sent, { guest_token: "gtok_secret_abc123" });
+  assert.equal(sent.first_name, undefined, "a token must not be sent alongside a name");
+  assert.equal(res.guest_add, "existing guest");
+});
+
+test("the same guest is recognised regardless of case and spacing", async () => {
+  guests.forgetCart(GUEST_CART);
+  await addGuest("Luke", "Wulf");
+  reset();
+  await addGuest("  luke  ", "WULF");
+  const sent = JSON.parse(valueOf(callFor("cart", "add-items"), "--guest-json"));
+  assert.deepEqual(sent, { guest_token: "gtok_secret_abc123" }, "not treated as a second guest");
+});
+
+test("a guest add with no cart to join is refused before dd-cli is called", async () => {
+  const res = await addGuest("Ada", "Lovelace", null);
+  assert.equal(res.success, false);
+  assert.match(res.error, /existing group cart/i);
+  assert.equal(invocations("cart", "add-items").length, 0);
+});
+
+test("a guest add cannot also create a cart", async () => {
+  for (const extra of [{ group_cart: true }, { spend_limit_cents: 2500 }]) {
+    reset();
+    const res = await run("add_items_to_cart", {
+      store_id: "store_1",
+      menu_id: "menu_1",
+      items: [{ item_id: "i_100", item_name: "Ramen", quantity: 1 }],
+      cart_uuid: GUEST_CART,
+      guest_first_name: "Ada",
+      guest_last_name: "Lovelace",
+      ...extra,
+    });
+    assert.equal(res.success, false, `${JSON.stringify(extra)} should be refused`);
+    assert.equal(invocations("cart", "add-items").length, 0);
+  }
+});
+
+test("half a guest name is refused — the name is the tracking key", async () => {
+  const res = await run("add_items_to_cart", {
+    store_id: "store_1",
+    menu_id: "menu_1",
+    items: [{ item_id: "i_100", item_name: "Ramen", quantity: 1 }],
+    cart_uuid: GUEST_CART,
+    guest_first_name: "Ada",
+  });
+  assert.equal(res.success, false);
+  assert.match(res.error, /guest_last_name/);
+  assert.equal(invocations("cart", "add-items").length, 0);
+});
+
+test("a normal add is untouched by any of this", async () => {
+  const res = await run("add_items_to_cart", {
+    store_id: "store_1",
+    menu_id: "menu_1",
+    items: [{ item_id: "i_100", item_name: "Ramen", quantity: 1 }],
+  });
+  assert.ok(!callFor("cart", "add-items").includes("--guest-json"));
+  assert.equal(res.cart_uuid, "cart_1");
+});
+
+test("joining someone's group cart uses the link, not the group-cart flag", async () => {
+  await run("add_items_to_cart", {
+    store_id: "store_1",
+    menu_id: "menu_1",
+    items: [{ item_id: "i_100", item_name: "Ramen", quantity: 1 }],
+    group_cart_url: "https://drd.sh/cart/abc/",
+  });
+  const argv = callFor("cart", "add-items");
+  assert.equal(valueOf(argv, "--group-cart-url"), "https://drd.sh/cart/abc/");
+  assert.ok(!argv.includes("--group-cart"), "joining is not creating");
+});
+
+test("a guest add that cannot be recorded says so instead of reporting success", async () => {
+  guests.forgetCart("cart_1");
+  // Joining by link alone: the fake answers without a cart_uuid to file under.
+  process.env.FAKE_DD_CLI_NO_CART_UUID = "1";
+  try {
+    const res = await run("add_items_to_cart", {
+      store_id: "store_1",
+      menu_id: "menu_1",
+      items: [{ item_id: "i_100", item_name: "Ramen", quantity: 1 }],
+      group_cart_url: "https://drd.sh/cart/abc/",
+      guest_first_name: "Ada",
+      guest_last_name: "Lovelace",
+    });
+    assert.match(res.warning, /second one/i, "the loss of continuity must be surfaced");
+  } finally {
+    delete process.env.FAKE_DD_CLI_NO_CART_UUID;
+  }
+});
+
+test("list_cart_guests reports names and no tokens", async () => {
+  guests.forgetCart(GUEST_CART);
+  await addGuest("Luke", "Wulf");
+  const res = await run("list_cart_guests", { cart_uuid: GUEST_CART });
+  assert.deepEqual(res.guests, ["Luke Wulf"]);
+  assert.ok(!JSON.stringify(res).includes("gtok_secret_abc123"));
+});
+
+test("deleting a cart forgets its guests", async () => {
+  guests.forgetCart(GUEST_CART);
+  await addGuest("Luke", "Wulf");
+  assert.ok(guests.guestToken(GUEST_CART, "Luke", "Wulf"));
+
+  await run("delete_cart", { cart_uuid: GUEST_CART });
+  assert.equal(guests.guestToken(GUEST_CART, "Luke", "Wulf"), null);
+});
+
+test("the guest store is written user-only", async () => {
+  guests.forgetCart(GUEST_CART);
+  await addGuest("Luke", "Wulf");
+  const mode = statSync(guests.guestsFilePath()).mode & 0o777;
+  assert.equal(mode, 0o600, `expected 0600, got ${mode.toString(8)}`);
+});
+
+test("stripUiFields drops a guest_token anywhere it appears", () => {
+  const cleaned = ddcli.stripUiFields({
+    cart_uuid: "c1",
+    guest_cart: { name: "Luke Wulf", guest_token: "gtok_secret_abc123" },
+  });
+  assert.ok(!JSON.stringify(cleaned).includes("gtok_secret_abc123"));
 });

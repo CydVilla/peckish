@@ -343,6 +343,13 @@ surface authenticates without a keychain or a browser.
 - **Group carts** (new in 0.4.0): "start a group order for the team, $25 each" —
   creates a shareable cart link, optional per-person spend limit, host reviews
   and submits when everyone's in.
+- **Guest sub-carts** (new): order for people who have no DoorDash account at
+  all — "add a veggie burrito for Luke Wulf" puts their items in their own
+  sub-cart of your group cart. They never sign in, never install anything.
+  Name them the same way each time and their items stay together; ask "who's
+  ordered?" to see who is tracked. The per-guest credential DoorDash issues is
+  held by Peckish and never shown to you or the model — see
+  [Guest sub-carts](#guest-sub-carts).
 - **Express delivery** (new): asks for Priority when you want it fastest —
   offered per-cart, priced into the quote before you approve.
 - **Credits control** (new): DoorDash credits apply by default; say "don't use
@@ -370,6 +377,40 @@ surface authenticates without a keychain or a browser.
   reason — not just "did it go through".
 - Work benefits (company budgets + expense codes), scheduled delivery,
   pickup, groceries/retail/pets/alcohol, group order history.
+
+## Guest sub-carts
+
+A DoorDash group cart holds items for two kinds of people, and they work
+differently:
+
+- **Participants** have their own DoorDash account. They open the group cart
+  link and add their own items under their own identity. Peckish joins one on
+  your behalf with the link itself.
+- **Guests** have no account and never touch DoorDash. The host's account adds
+  on their behalf, into a sub-cart tagged with their name. This is what makes
+  "just tell me what everyone wants" work for a team where only one person has
+  the CLI.
+
+DoorDash issues a per-guest token on that guest's first add. It is a bearer
+credential for their sub-cart, it is returned exactly once — `cart show` never
+echoes it and there is no endpoint to fetch it again — and dd-cli's own
+guidance is to keep it server-side and out of logs.
+
+So Peckish keeps it. Tokens are stored in `~/.peckish/guests.json` (mode
+`0600`) keyed by cart and guest name, stripped out of every tool result before
+the model sees one, and therefore never written to the session audit log, which
+records a preview of every result. The model works purely in names: it says
+"Luke Wulf" and Peckish supplies the right credential. There is no way for the
+assistant to read, request or repeat a token, which is the point.
+
+Two consequences worth knowing:
+
+- **Spelling matters.** "Luke Wulf" and "Luke Wolf" are two guests with two
+  sub-carts. Peckish ignores case and extra spaces, nothing more.
+- **The file matters.** Delete it mid-cart and the affected guests' continuity
+  is gone — the only recovery is starting them again under the same name,
+  which forks their line items. Peckish drops a cart's guests once its order is
+  submitted or the cart is deleted, and prunes anything older than 30 days.
 
 ## dd-cli versions
 

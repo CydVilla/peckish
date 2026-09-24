@@ -94,6 +94,10 @@
       "description": "Add items to a cart (creates one if no cart_uuid passed and none open at the store)."
     },
     {
+      "name": "list_cart_guests",
+      "description": "Names of the guests Peckish is tracking on a group cart — people with no DoorDash account whose items the h…"
+    },
+    {
       "name": "show_cart",
       "description": "Show cart contents (no pricing — use preview_order for that)."
     },

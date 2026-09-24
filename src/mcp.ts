@@ -32,6 +32,7 @@ const READ_ONLY = new Set([
   "get_store_details",
   "list_carts",
   "show_cart",
+  "list_cart_guests",
   "get_order_history",
   "get_order_status",
   "get_receipt",
@@ -60,7 +61,8 @@ const INSTRUCTIONS = `Peckish orders food on DoorDash for the signed-in user. Op
 - PROMOS & FEES: get_menu and get_restaurant_item_details already carry the store's active promotions and the items that qualify (priced against the delivery address) — read those first; one list_promos call before presenting a store's preview is still worth it — offer eligible promos (check stated minimums), never apply silently, re-preview after. Mention applied DoorDash credits. Pickup often dodges delivery fees — compare when fees bother the user and the store is close.
 - HISTORY: pass include_group_order for team/office/shared-order questions; derive "my usual" from get_order_history frequency and confirm your interpretation before reordering. If list_carts shows an old cart (days+), mention it and ask whether to resume or clean up. Spending questions: get_order_history + get_receipt per order, fees and tips broken out honestly.
 - INTENT: every tool requires an "intent" — one short goal line ("Help the user order dinner"). It is sent to DoorDash. Keep it generic: never include the user's verbatim words, dietary/health/religious details, budgets, or names.
-- GROUP CARTS: add_items_to_cart with group_cart creates a shareable cart (share the response's group_cart_url); spend_limit_cents caps per-participant spend on a new host-pays cart; joining someone's cart = their cart_uuid + group_cart. Host previews/submits; confirm participants are done first.
+- GROUP CARTS: add_items_to_cart with group_cart creates a shareable cart (share the response's group_cart_url); spend_limit_cents caps per-participant spend on a new host-pays cart (the host is exempt from their own cap); joining someone else's cart = their group_cart_url. Host previews/submits; confirm participants are done first.
+- GUESTS: someone with no DoorDash account is added by the host with guest_first_name + guest_last_name on the group cart's cart_uuid — their items go in their own sub-cart. Use the SAME name every time for the same person, or their items split across two sub-carts; list_cart_guests shows who is tracked. Peckish holds the sub-cart credential itself and never returns it — you never see, need, or ask for a token. A guest add needs an existing cart, so create the group cart first; it cannot carry group_cart or spend_limit_cents. Cart adds are additive and NOT idempotent: after a timeout or error, check the response's item_errors[] before retrying — an item missing from that list already went in, and retrying doubles it.
 - PRIORITY (express) DELIVERY: preview with priority and confirm quote.delivery_availability.delivery_options[] has delivery_option_type "PRIORITY" before promising; delivery-only, not with pickup/scheduled; same flag at submit.
 - CREDITS: apply by default — never prompt; only pass no_apply_credits (preview AND submit) when the user explicitly opts out.
 - SEARCH FILTERS: narrow server-side rather than by hand — dashpass_only when the user has DashPass, price_tier for "cheap"/"nice", max_eta_minutes when they are in a hurry, distance_preference "broad" to widen a thin result set.

@@ -31,8 +31,15 @@ const DD_CLI = resolveDdCliPath();
 const TIMEOUT_MS = 90_000;
 const MAX_BUFFER = 32 * 1024 * 1024; // menus can be large
 
-/** Keys that carry UI-rendering or model-steering content we must drop. */
-const STRIPPED_KEYS = new Set(["widget_type", "assistant_instructions"]);
+/**
+ * Keys that never reach the model: UI-rendering and model-steering content,
+ * plus `guest_token` — a bearer credential for one guest's sub-cart that
+ * dd-cli's guidance says to keep server-side and out of logs. Peckish's audit
+ * log previews every tool result, so stripping it here keeps it off disk too.
+ * The one path that legitimately needs it reads the raw payload (ddJsonRaw)
+ * and hands it straight to the guest store.
+ */
+const STRIPPED_KEYS = new Set(["widget_type", "assistant_instructions", "guest_token"]);
 
 export function stripUiFields(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(stripUiFields);
@@ -155,6 +162,20 @@ export async function ddJson(
   args: string[],
   opts: { retryOnce?: boolean } = {},
 ): Promise<Record<string, unknown>> {
+  return stripUiFields(await ddJsonRaw(args, opts)) as Record<string, unknown>;
+}
+
+/**
+ * The payload as dd-cli sent it, stripping nothing.
+ *
+ * Only for the guest sub-cart add, which must read the one-time `guest_token`
+ * out of the response before it is dropped. Everything else calls ddJson —
+ * a raw payload must never be returned to the model.
+ */
+export async function ddJsonRaw(
+  args: string[],
+  opts: { retryOnce?: boolean } = {},
+): Promise<Record<string, unknown>> {
   try {
     return await ddJsonOnce(args);
   } catch (err) {
@@ -164,6 +185,17 @@ export async function ddJson(
     }
     throw err;
   }
+}
+
+/** First `guest_token` anywhere in a raw payload — dd-cli nests it on the sub-cart. */
+export function findGuestToken(value: unknown, depth = 0): string | null {
+  if (depth > 8 || !value || typeof value !== "object") return null;
+  for (const [k, v] of Object.entries(value)) {
+    if (k === "guest_token" && typeof v === "string" && v) return v;
+    const nested = findGuestToken(v, depth + 1);
+    if (nested) return nested;
+  }
+  return null;
 }
 
 async function ddJsonOnce(args: string[]): Promise<Record<string, unknown>> {
@@ -192,9 +224,10 @@ async function ddJsonOnce(args: string[]): Promise<Record<string, unknown>> {
     }
   }
   if (!payload) throw new DdCliError("dd-cli returned an empty response");
-  const clean = stripUiFields(payload) as Record<string, unknown>;
-  if (env.isError) clean._cli_is_error = true;
-  return clean;
+  // Unstripped on purpose — ddJson strips on the way out, so the one caller
+  // that needs the guest token can read it first.
+  if (env.isError) payload = { ...payload, _cli_is_error: true };
+  return payload;
 }
 
 /** Run a dd-cli command in --beautify mode and return the plain text. */
