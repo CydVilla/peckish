@@ -14,8 +14,12 @@ import {
   invalidateDefaultAddress,
   ddCliAtLeast,
   ddCliVersion,
+  ddJsonRaw,
+  findGuestToken,
+  stripUiFields,
   DdCliError,
 } from "./ddcli.js";
+import { guestToken, rememberGuest, listGuests, forgetCart } from "./guests.js";
 import { addPreference, removePreference, listPreferences } from "./prefs.js";
 import { confirmOrderPlacement, confirmAction } from "./confirm.js";
 import { probeSignin, launchLogin, loginInProgress, waitForSignin } from "./signin.js";
@@ -321,7 +325,18 @@ export const toolHandlers: Record<string, Handler> = {
     return j(await ddJson(args, { retryOnce: true }));
   },
 
-  async add_items_to_cart({ store_id, menu_id, items, cart_uuid, fulfillment, group_cart, spend_limit_cents }) {
+  async add_items_to_cart({
+    store_id,
+    menu_id,
+    items,
+    cart_uuid,
+    group_cart_url,
+    fulfillment,
+    group_cart,
+    spend_limit_cents,
+    guest_first_name,
+    guest_last_name,
+  }) {
     const cleaned = (items as any[]).map((it) => ({
       ...it,
       item_id: String(it.item_id).replace(/^i_/, ""),
@@ -337,10 +352,88 @@ export const toolHandlers: Record<string, Handler> = {
       JSON.stringify(cleaned),
     ];
     if (cart_uuid) args.push("--cart-uuid", String(cart_uuid));
+    if (group_cart_url) args.push("--group-cart-url", String(group_cart_url));
     if (fulfillment) args.push("--fulfillment", String(fulfillment));
     if (group_cart) args.push("--group-cart");
     if (spend_limit_cents != null) args.push("--spend-limit-cents", String(spend_limit_cents));
-    return j(await ddJson(args));
+
+    // ── Guest sub-cart ────────────────────────────────────────────────────
+    // A guest never signs in: the host adds for them, tagged with their name
+    // on the first add and with the token dd-cli returned on every add after.
+    const isGuestAdd = Boolean(guest_first_name || guest_last_name);
+    if (!isGuestAdd) return j(await ddJson(args));
+
+    // dd-cli's own constraints, enforced here so a mistake costs a clear
+    // message instead of a rejected call the model has to interpret.
+    if (!guest_first_name || !guest_last_name) {
+      return j({
+        success: false,
+        error: "A guest needs both guest_first_name and guest_last_name — that name is how Peckish tracks their sub-cart across adds.",
+      });
+    }
+    if (!cart_uuid && !group_cart_url) {
+      return j({
+        success: false,
+        error:
+          "A guest can only be added to an EXISTING group cart: pass cart_uuid (or group_cart_url for the first add). Create the cart first with group_cart.",
+      });
+    }
+    if (group_cart || spend_limit_cents != null) {
+      return j({
+        success: false,
+        error:
+          "group_cart and spend_limit_cents create a cart; a guest add always targets one that exists. Create the group cart first, then add guests to its cart_uuid.",
+      });
+    }
+
+    const known = cart_uuid ? guestToken(String(cart_uuid), guest_first_name, guest_last_name) : null;
+    args.push(
+      "--guest-json",
+      // Never send the name alongside a token — dd-cli treats the token as the
+      // identity, and the name would be a second, conflicting one.
+      known
+        ? JSON.stringify({ guest_token: known })
+        : JSON.stringify({ first_name: guest_first_name, last_name: guest_last_name }),
+    );
+
+    // Raw read: the token appears exactly once, on this response, and is
+    // stripped from everything the model or the audit log ever sees.
+    const raw = await ddJsonRaw(args);
+
+    // A new guest is only durable once their token is filed against a cart.
+    // Either half missing — no token in the response, or nothing to key it on
+    // — means the next add for this name opens a SECOND sub-cart, so say so
+    // rather than reporting a clean success.
+    let lostContinuity = false;
+    if (!known) {
+      const token = findGuestToken(raw);
+      const forCart = String(cart_uuid ?? raw.cart_uuid ?? "");
+      if (token && forCart) rememberGuest(forCart, guest_first_name, guest_last_name, token);
+      else lostContinuity = true;
+    }
+
+    return j({
+      ...(stripUiFields(raw) as Record<string, unknown>),
+      guest: `${guest_first_name} ${guest_last_name}`,
+      guest_add: known ? "existing guest" : "new guest",
+      ...(lostContinuity
+        ? {
+            warning:
+              "The items were added, but Peckish could not record this guest's sub-cart, so a later add under the same name would start a second one. Check show_cart before adding more for them.",
+          }
+        : {}),
+      note: "Adds are additive, not idempotent: on a timeout or error, check item_errors[] before retrying — an item missing from it already went in, and retrying doubles it.",
+    });
+  },
+
+  async list_cart_guests({ cart_uuid }) {
+    const guests = listGuests(String(cart_uuid));
+    return j({
+      guests: guests.map((g) => g.name),
+      note: guests.length
+        ? "Guests Peckish is tracking on this cart. Real participants who joined with their own DoorDash login are NOT listed here — cart show has the line items."
+        : "No guests tracked for this cart. Anyone who joined via the group cart link signed in themselves and is not a guest.",
+    });
   },
 
   async show_cart({ cart_uuid }) {
@@ -361,7 +454,9 @@ export const toolHandlers: Record<string, Handler> = {
   },
 
   async delete_cart({ cart_uuid }) {
-    return j(await ddJson(["cart", "delete", "--cart-uuid", String(cart_uuid)]));
+    const res = await ddJson(["cart", "delete", "--cart-uuid", String(cart_uuid)]);
+    forgetCart(String(cart_uuid)); // the sub-carts died with it
+    return j(res);
   },
 
   async preview_order({ cart_uuid, scheduled_time, include_work_benefits, selected_budget_id, fulfillment, priority, no_apply_credits }) {
@@ -519,6 +614,9 @@ export const toolHandlers: Record<string, Handler> = {
           break;
         }
       }
+    }
+    if (String((finalStatus?.status ?? submitRes.success) || "").match(/^(successful|true)$/i)) {
+      forgetCart(String(cart_uuid)); // submit consumes the cart, guests and all
     }
     return j({
       submit_response: submitRes,
@@ -828,7 +926,7 @@ const RAW_TOOLS: Anthropic.Tool[] = [
   {
     name: "add_items_to_cart",
     description:
-      "Add items to a cart (creates one if no cart_uuid passed and none open at the store). APPEND semantics: re-adding an item_id SUMS quantities. Items need item_id + item_name + quantity; customizations go in nested_options[] (entries: id, name, quantity, optional recursive options[]). Weight-priced items (deli, butcher, produce) take a decimal quantity in their own unit — the final charge is by actual weight, so tell the user the price is an estimate. Items the merchant ships with default modifications keep them unless you pass default_handling 'exact'. On required-options failure the response lists required_options[] — ask the user to choose, then retry. Check list_carts first.",
+      "Add items to a cart (creates one if no cart_uuid passed and none open at the store). Also the only way to add for a GUEST — see guest_first_name. APPEND semantics: re-adding an item_id SUMS quantities. Items need item_id + item_name + quantity; customizations go in nested_options[] (entries: id, name, quantity, optional recursive options[]). Weight-priced items (deli, butcher, produce) take a decimal quantity in their own unit — the final charge is by actual weight, so tell the user the price is an estimate. Items the merchant ships with default modifications keep them unless you pass default_handling 'exact'. On required-options failure the response lists required_options[] — ask the user to choose, then retry. Check list_carts first.",
     input_schema: {
       type: "object",
       properties: {
@@ -882,16 +980,33 @@ const RAW_TOOLS: Anthropic.Tool[] = [
             required: ["item_id", "item_name", "quantity"],
           },
         },
-        cart_uuid: str("Existing cart to append to (omit to create/append to store's open cart). For someone else's group cart: pass their cart_uuid to join as a participant."),
+        cart_uuid: str("Existing cart to append to (omit to create/append to store's open cart), or the group cart to add a guest to."),
+        group_cart_url: str(
+          "Join someone else's group cart from its shared link and add in one call. Use the cart_uuid the response returns for any later adds. Only for the signed-in user joining as themselves — a guest never joins.",
+        ),
         fulfillment: { type: "string", enum: ["delivery", "pickup"], description: "Mode for a NEW cart (default delivery)" },
         group_cart: bool(
-          "Create a shareable GROUP cart (no cart_uuid), or join another person's group cart (with their cart_uuid). Response carries group_cart_url — share it with participants.",
+          "Create a shareable GROUP cart (no cart_uuid). Response carries group_cart_url — share it with participants. Not for joining one (use group_cart_url) and not for guest adds.",
         ),
         spend_limit_cents: int(
-          "Per-participant spend limit in CENTS for a NEW host-pays group cart (2500 = $25). Requires group_cart; cannot combine with cart_uuid. Omit for unlimited.",
+          "Per-participant spend limit in CENTS for a NEW host-pays group cart (2500 = $25). Requires group_cart; cannot combine with cart_uuid. Omit for unlimited. The host is exempt from their own limit.",
         ),
+        guest_first_name: str(
+          "Add these items for a GUEST — someone with no DoorDash account, whose items sit in their own sub-cart of a group cart the signed-in user hosts. Pass with guest_last_name and the group cart's cart_uuid. Peckish remembers the guest by name, so pass the same name for every later add and their items stay together.",
+        ),
+        guest_last_name: str("Guest's last name (required whenever guest_first_name is given)"),
       },
       required: ["store_id", "menu_id", "items"],
+    },
+  },
+  {
+    name: "list_cart_guests",
+    description:
+      "Names of the guests Peckish is tracking on a group cart — people with no DoorDash account whose items the host added for them. Use to answer 'who has ordered?' and to check a name before adding again (same name = same sub-cart). Real participants who joined with their own login are not listed; their items show in show_cart.",
+    input_schema: {
+      type: "object",
+      properties: { cart_uuid: str("Group cart UUID") },
+      required: ["cart_uuid"],
     },
   },
   {

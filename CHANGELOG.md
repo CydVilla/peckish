@@ -9,6 +9,38 @@ file's section for that version, every downloadable artifact, and a
 ## [Unreleased]
 
 ### Added
+- **Guest sub-carts.** A group cart can now hold items for people with no
+  DoorDash account: `add_items_to_cart` takes `guest_first_name` +
+  `guest_last_name` and puts that person's items in their own sub-cart of a
+  group cart the signed-in user hosts. `list_cart_guests` shows who is being
+  tracked. This was the last substantial dd-cli capability Peckish did not
+  reach — it is what lets one person with the CLI order for a team where
+  nobody else has an account.
+  - **The per-guest token never reaches the model.** DoorDash returns a
+    `guest_token` on a guest's first add; it is a bearer credential for their
+    sub-cart, appears exactly once (`cart show` never echoes it, nothing can
+    fetch it again), and dd-cli's guidance is to keep it out of logs and away
+    from humans. Peckish stores it in `~/.peckish/guests.json` (mode `0600`)
+    keyed by cart and guest name, and `guest_token` is now stripped from every
+    tool result — so it also never lands in the session audit log, which
+    previews every result. The model refers to guests by name only and has no
+    way to read or supply a token.
+  - Peckish enforces dd-cli's constraints itself rather than letting a bad
+    call fail downstream: a guest add needs an existing cart, cannot carry
+    `group_cart`/`spend_limit_cents`, needs both halves of the name, and never
+    sends a name alongside a token.
+  - A cart's guests are dropped when its order is submitted or the cart is
+    deleted; entries older than 30 days are pruned on write.
+- **Joining a group cart now uses its link.** `add_items_to_cart` takes
+  `group_cart_url`, which is how dd-cli actually joins another person's group
+  cart — the previous guidance (their `cart_uuid` plus `group_cart`) described
+  creating a cart, not joining one.
+- Both system prompts now spell out that cart adds are **additive, not
+  idempotent**: after a timeout or error, check `item_errors[]` before
+  retrying, because an item missing from that list already went in and a retry
+  doubles it.
+
+### Added
 - **End-to-end tests for the dd-cli command line Peckish builds.** A fake
   dd-cli (`tests/fixtures/fake-dd-cli.mjs`) records the argv each handler
   produces and answers with realistic envelopes, so the tests assert what

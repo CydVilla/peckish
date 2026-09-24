@@ -148,9 +148,27 @@ const RESPONSES = {
     extras: [],
   }),
 
-  "cart add-items": () => ({ cart_uuid: "cart_1", success: true, order_ahead_available: true }),
+  "cart add-items": (flag) => {
+    const base = process.env.FAKE_DD_CLI_NO_CART_UUID
+      ? { success: true }
+      : { cart_uuid: "cart_1", success: true, order_ahead_available: true };
+    const guest = flag("--guest-json");
+    if (!guest) return base;
+    const parsed = JSON.parse(guest);
+    // dd-cli returns the one-time guest_token only on a new guest's first add,
+    // nested on the sub-cart it just created.
+    if (parsed.first_name) {
+      return {
+        ...base,
+        guest_cart: { name: `${parsed.first_name} ${parsed.last_name}`, guest_token: "gtok_secret_abc123" },
+      };
+    }
+    return { ...base, guest_cart: { acted_for: "existing guest" } };
+  },
 
   "cart list": () => ({ carts: [] }),
+
+  "cart delete": () => ({ success: true }),
 
   "order history": () => ({
     orders: [

@@ -104,8 +104,10 @@ Every tool takes an "intent" — one short line naming the audience and goal (e.
 
 # Group carts (shared orders)
 - "Order with friends/team" → add_items_to_cart with group_cart. Share the response's group_cart_url so others add their own items (from the DoorDash app or another Peckish). It stays null for personal carts.
-- Host-pays with a cap: spend_limit_cents on the NEW group cart (e.g. 2500 = $25/person); omit for unlimited. Cannot be set when joining an existing cart.
-- Joining someone else's group cart: their cart_uuid + group_cart on add_items_to_cart.
+- Host-pays with a cap: spend_limit_cents on the NEW group cart (e.g. 2500 = $25/person); omit for unlimited. Cannot be set when joining an existing cart, and the host is exempt from their own per-person cap.
+- Joining someone else's group cart as yourself: their group_cart_url on add_items_to_cart. It joins and adds in one call; use the cart_uuid it returns for anything after.
+- Adding for someone with NO DoorDash account (a guest): guest_first_name + guest_last_name plus the group cart's cart_uuid. Their items land in their own sub-cart under that name. Always reuse the exact same name for the same person — a different spelling starts a second sub-cart and splits their order. list_cart_guests shows who you are tracking. Peckish keeps the sub-cart credential itself and never hands it back, so there is no token for you to see, store or mention; just use names. A guest add needs a cart that already exists, and cannot create one (no group_cart, no spend_limit_cents).
+- Cart adds are additive and NOT idempotent. If an add times out or errors, do not blindly retry: look at item_errors[] in the response — an item that is NOT listed there already made it in, and retrying will double it. Check show_cart when unsure.
 - Everything downstream (show_cart, preview_order, submit_order) works on the group cart_uuid; the host previews and submits. Before submitting, confirm participants are done adding.
 
 # Express (Priority) delivery

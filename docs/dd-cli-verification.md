@@ -79,6 +79,14 @@ real account state:
 - `address add --place-id` — saves an address **and** makes it the account-wide
   default
 - a weight-priced `cart add-items` with a decimal quantity
+- a guest add (`cart add-items --guest-json`) — creates a real sub-cart in a
+  real group cart. Worth dry-running per the `dd-group-cart-slackbot` skill's
+  own procedure (create a group cart with a tiny `--spend-limit-cents`, add a
+  guest, add a second item for the same guest, confirm `cart show` never
+  echoes the token, then `cart delete` — never `order submit`). If dd-cli
+  returns the `guest_token` somewhere other than where `findGuestToken()`
+  looks, Peckish will warn on the add and lose that guest's continuity, so
+  confirm the token is captured by checking `~/.peckish/guests.json`
 
 Don't run either unless the user asks for it. Delete any test cart afterwards.
 
