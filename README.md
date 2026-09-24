@@ -385,6 +385,21 @@ degrades instead of breaking:
 | ≥ 0.2.4 | Promotions on menus and item details, searching from a saved `address_id` |
 | ≥ 0.2.5 | Search filters, per-store pickup availability, schedule-ahead windows, weight-priced items |
 
+Two scripts keep this honest:
+
+```sh
+node scripts/verify-dd-cli.mjs      # what YOUR dd-cli actually accepts
+node scripts/check-dd-cli-release.mjs   # is a newer dd-cli out?
+```
+
+`verify-dd-cli.mjs` runs the commands Peckish runs against your real,
+signed-in binary and reports which flags it accepts and what field names the
+responses carry. It is read-only — no carts, no saved addresses, no orders.
+Run it after a dd-cli upgrade, or when something Peckish sends comes back
+rejected — [docs/dd-cli-verification.md](docs/dd-cli-verification.md) is the
+checklist for acting on what it reports. `check-dd-cli-release.mjs` runs weekly in CI and files an issue when
+dd-cli publishes a release newer than the one Peckish targets.
+
 Behaviour Peckish applies *on its own* — like pricing menus against your saved
 address so promo eligibility is right — stays off until the version check
 confirms the binary supports it. A flag the model asked for explicitly is

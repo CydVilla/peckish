@@ -9,6 +9,37 @@ file's section for that version, every downloadable artifact, and a
 ## [Unreleased]
 
 ### Added
+- **End-to-end tests for the dd-cli command line Peckish builds.** A fake
+  dd-cli (`tests/fixtures/fake-dd-cli.mjs`) records the argv each handler
+  produces and answers with realistic envelopes, so the tests assert what
+  Peckish actually sends — that `--address-id` replaces `--lat/--lng` on a
+  0.2.4+ binary and not before, that `--price-tier` repeats per tier, that an
+  unsupported command is never attempted, that decimal weights and
+  `default_handling` survive serialization, and that every consumer command
+  still carries `--json-output` and `--intent`. It cannot confirm dd-cli's
+  real flag names — only a live binary can — but it covers the half Peckish
+  owns. 19 new cases; the suite is 56.
+- **`scripts/verify-dd-cli.mjs`** — run Peckish's assumptions against a real,
+  signed-in dd-cli. Read-only (no carts, addresses, promos or orders): it
+  reports which flags the installed binary accepts and prints the field names
+  the responses actually carry, so the promo/order-ahead/weight key patterns
+  in `src/tools.ts` can be replaced with certainty.
+- **`docs/dd-cli-verification.md`** — the checklist for acting on what
+  `verify-dd-cli.mjs` reports: which flag names to correct and where, how to
+  reconcile the real response field names against the trimmers' token set, and
+  which two write paths stay unexercised without explicit consent.
+- **`scripts/check-dd-cli-release.mjs` and a weekly release-watch workflow.**
+  Peckish sat three dd-cli releases behind before anyone noticed; this checks
+  the published releases against `DD_CLI_RECOMMENDED_VERSION` every Monday and
+  files an issue when a newer one is out.
+
+### Fixed
+- The age-restriction path is now named rather than implied: both system
+  prompts call out `error_reason AGENTIC_RESTRICTED_ITEM_NOT_ALLOWED` on
+  `submit_order` as the signal to hand over `get_checkout_url` instead of
+  retrying the submit.
+
+### Added
 - **dd-cli 0.2.3–0.2.5 support.** Peckish had been built against dd-cli 0.2.2;
   three releases of new surface went unused. Now wired through:
   - **Address lookup** (dd-cli 0.2.3): `find_address` resolves a typed address
