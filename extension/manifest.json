@@ -62,16 +62,24 @@
       "description": "Change the ACCOUNT-WIDE default delivery address (persists across app/web)."
     },
     {
+      "name": "find_address",
+      "description": "Look up a street address the user typed and get back candidate addresses with place_ids."
+    },
+    {
+      "name": "add_address",
+      "description": "Save a candidate from find_address to the user's DoorDash account AND make it the ACCOUNT-WIDE default deli…"
+    },
+    {
       "name": "search_restaurants",
       "description": "Search nearby restaurants by free-text query."
     },
     {
       "name": "get_menu",
-      "description": "Fetch a restaurant's menu: returns menu_id (needed for cart adds and item details), store_is_open, and item…"
+      "description": "Fetch a restaurant's menu: returns menu_id (needed for cart adds and item details), store_is_open, the stor…"
     },
     {
       "name": "get_restaurant_item_details",
-      "description": "Full details for one restaurant menu item: price, description, and extras[] customization groups (each with…"
+      "description": "Full details for one restaurant menu item: price, description, any promotion it qualifies for, and extras[]…"
     },
     {
       "name": "get_store_details",
@@ -119,7 +127,7 @@
     },
     {
       "name": "get_order_status",
-      "description": "Check whether a submitted order went through: successful | pending (check again) | action_required (user mu…"
+      "description": "Track a submitted order through its whole lifecycle: successful | pending (check again) | action_required (…"
     },
     {
       "name": "get_receipt",

@@ -21,7 +21,13 @@ import {
   type ChatMessage,
   type TurnUsageReport,
 } from "./agent.js";
-import { getDefaultAddress, openCartsLine, DdCliError, resolveDdCliPath } from "./ddcli.js";
+import {
+  getDefaultAddress,
+  openCartsLine,
+  ddCliVersion,
+  DdCliError,
+  resolveDdCliPath,
+} from "./ddcli.js";
 import { isAuthError, launchLogin, waitForSignin } from "./signin.js";
 import { canBrowserSignin, platformId, signinHint } from "./platform.js";
 import { registerTerminalProviders } from "./confirm.js";
@@ -142,6 +148,7 @@ async function main(): Promise<void> {
     defaultAddressLine: addressLine,
     timezone,
     openCartsLine: cartsLine,
+    ddCliVersion: await ddCliVersion(),
   });
 
   let history: ChatMessage[] = [];

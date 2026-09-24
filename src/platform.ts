@@ -18,6 +18,64 @@ export type PlatformId = "darwin-arm64" | "linux-amd64" | "unsupported";
 /** First dd-cli release with Linux builds and `export-token`. */
 export const DD_CLI_LINUX_MIN_VERSION = "0.2.2";
 
+/** First dd-cli release Peckish works against at all (`--intent` is required). */
+export const DD_CLI_MIN_VERSION = "0.2.1";
+
+/**
+ * The dd-cli Peckish is built against. Below this, ordering still works, but
+ * address lookup (0.2.3), promo-aware menus and `--address-id` (0.2.4), and
+ * the search filters, pickup availability and weight-priced items (0.2.5) are
+ * unavailable — Peckish detects the version and leaves those paths off.
+ */
+export const DD_CLI_RECOMMENDED_VERSION = "0.2.5";
+
+/** Parse the first semver-looking token out of `dd-cli --version` output. */
+export function parseVersion(output: string): string | null {
+  // Tolerates a leading "v" (dd-cli prints both forms across releases).
+  return output.match(/v?(\d+\.\d+\.\d+)\b/)?.[1] ?? null;
+}
+
+/** Compare dotted numeric versions: negative if a < b, 0 if equal, positive if a > b. */
+export function compareVersions(a: string, b: string): number {
+  const pa = a.split(".").map(Number);
+  const pb = b.split(".").map(Number);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const d = (pa[i] ?? 0) - (pb[i] ?? 0);
+    if (d !== 0) return d;
+  }
+  return 0;
+}
+
+/**
+ * How the installed dd-cli is described to the model. Newer releases are
+ * additive, so an older binary just means fewer options — the model is told
+ * which, once, instead of discovering it as a failed call mid-order.
+ */
+export function ddCliVersionLine(version: string | null | undefined): string {
+  if (!version) return "unknown";
+  if (compareVersions(version, DD_CLI_RECOMMENDED_VERSION) >= 0) return version;
+  const missing: string[] = [];
+  if (compareVersions(version, "0.2.3") < 0)
+    missing.push("address lookup (find_address/add_address)");
+  if (compareVersions(version, "0.2.4") < 0)
+    missing.push("promo-aware menus and address_id search");
+  if (compareVersions(version, "0.2.5") < 0)
+    missing.push("search filters, pickup availability and weight-priced items");
+  return (
+    `${version} — older than the ${DD_CLI_RECOMMENDED_VERSION} Peckish targets, so these are ` +
+    `unavailable: ${missing.join("; ")}. Mention the upgrade only if the user asks for one of them.`
+  );
+}
+
+/** What the user gets told when their dd-cli predates a feature they asked for. */
+export function upgradeHint(current: string | null): string {
+  const have = current ? `dd-cli ${current} is installed` : "your dd-cli version could not be read";
+  return (
+    `${have}; this needs dd-cli ≥ ${DD_CLI_RECOMMENDED_VERSION}. Download the newer ` +
+    "asset from https://github.com/doordash-oss/doordash-cli/releases and reinstall."
+  );
+}
+
 export function platformId(platform = osPlatform(), arch = osArch()): PlatformId {
   if (platform === "darwin" && arch === "arm64") return "darwin-arm64";
   if (platform === "linux" && arch === "x64") return "linux-amd64";

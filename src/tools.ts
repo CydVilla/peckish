@@ -7,11 +7,19 @@
  * that gate lives here in code, not in the model's judgment.
  */
 import type Anthropic from "@anthropic-ai/sdk";
-import { ddJson, ddBeautify, getDefaultAddress, DdCliError } from "./ddcli.js";
+import {
+  ddJson,
+  ddBeautify,
+  getDefaultAddress,
+  invalidateDefaultAddress,
+  ddCliAtLeast,
+  ddCliVersion,
+  DdCliError,
+} from "./ddcli.js";
 import { addPreference, removePreference, listPreferences } from "./prefs.js";
 import { confirmOrderPlacement, confirmAction } from "./confirm.js";
 import { probeSignin, launchLogin, loginInProgress, waitForSignin } from "./signin.js";
-import { canBrowserSignin, signinHint } from "./platform.js";
+import { canBrowserSignin, signinHint, upgradeHint } from "./platform.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -35,6 +43,59 @@ interface MenuItemWire {
   has_required_modifiers?: boolean;
   is_orderable?: boolean;
   unavailability_reason?: string;
+  [key: string]: unknown;
+}
+
+/**
+ * Fields the trimmers keep beyond their explicit allowlist.
+ *
+ * dd-cli keeps adding per-item and per-store signal — promotions and
+ * qualifying items (0.2.4), order-ahead/schedule-ahead windows and
+ * weight-priced units (0.2.5) — under names Peckish can't enumerate ahead of a
+ * release. A strict allowlist silently swallowed all of it, so anything whose
+ * key names one of these concepts rides along untrimmed. Everything else is
+ * still dropped: menus run to thousands of items and the context is finite.
+ */
+const CARRY_THROUGH_TOKENS = new Set([
+  "promo",
+  "promos",
+  "promotion",
+  "promotions",
+  "discount",
+  "discounts",
+  "deal",
+  "deals",
+  "savings",
+  "ahead",
+  "weight",
+  "unit",
+  "units",
+  "measurement",
+  "purchase",
+]);
+
+/**
+ * Matched on whole snake_case tokens, not substrings — "community_rating"
+ * contains "unit" and would otherwise ride along as promo signal.
+ */
+export function carriesSignal(key: string): boolean {
+  return key
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .some((token) => CARRY_THROUGH_TOKENS.has(token));
+}
+
+export function carryThrough(
+  source: Record<string, unknown>,
+  skip: Iterable<string> = [],
+): Record<string, unknown> {
+  const skipped = new Set(skip);
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(source)) {
+    if (skipped.has(k) || v == null) continue;
+    if (carriesSignal(k)) out[k] = v;
+  }
+  return out;
 }
 
 export function trimMenuItem(it: MenuItemWire) {
@@ -49,10 +110,55 @@ export function trimMenuItem(it: MenuItemWire) {
     ...(it.is_orderable === false
       ? { is_orderable: false, unavailability_reason: it.unavailability_reason }
       : {}),
+    ...carryThrough(it),
   };
 }
 
 const MENU_ITEM_CAP = 160;
+
+// ---------------------------------------------------------------------------
+// Location arguments (dd-cli >=0.2.4)
+//
+// `search` and `find-nearby-stores` take --address-id OR --lat/--lng, never
+// both; `menu` and `restaurant-item-details` take --address-id only, and use
+// it to decide which promotions the user is eligible for. Peckish prefers the
+// saved address id wherever the binary supports it — coordinates alone lose
+// the promo context — and falls back to the old lat/lng resolution on older
+// binaries.
+// ---------------------------------------------------------------------------
+
+const ADDRESS_ID_VERSION = "0.2.4";
+
+/** Location flags for a store-search command, plus a note on what was used. */
+async function locationArgs(opts: {
+  address_id?: string;
+  lat?: number;
+  lng?: number;
+}): Promise<{ args: string[]; searched_near: string }> {
+  if (opts.address_id) {
+    return { args: ["--address-id", String(opts.address_id)], searched_near: "requested saved address" };
+  }
+  if (opts.lat != null && opts.lng != null) {
+    return { args: ["--lat", String(opts.lat), "--lng", String(opts.lng)], searched_near: "provided coords" };
+  }
+  const def = await getDefaultAddress();
+  if (!def) return { args: [], searched_near: "dd-cli default" };
+  if (await ddCliAtLeast(ADDRESS_ID_VERSION)) {
+    return { args: ["--address-id", def.address_id], searched_near: "default saved address" };
+  }
+  return {
+    args: ["--lat", String(def.lat), "--lng", String(def.lng)],
+    searched_near: "default saved address (coordinates — dd-cli too old for promo-aware search)",
+  };
+}
+
+/** --address-id for the commands that accept nothing else (menu, item details). */
+async function addressIdArgs(address_id?: string): Promise<string[]> {
+  if (!(await ddCliAtLeast(ADDRESS_ID_VERSION))) return [];
+  if (address_id) return ["--address-id", String(address_id)];
+  const def = await getDefaultAddress();
+  return def ? ["--address-id", def.address_id] : [];
+}
 
 // ---------------------------------------------------------------------------
 // Handlers
@@ -78,22 +184,55 @@ export const toolHandlers: Record<string, Handler> = {
     );
     if (!ok) return j({ success: false, declined_by_user: true });
     const res = await ddJson(["address", "set", "--address-id", String(address_id), "--yes"]);
+    invalidateDefaultAddress();
     return j(res);
   },
 
-  async search_restaurants({ query, lat, lng, limit }) {
-    const args = ["search", "-q", String(query)];
-    let usedDefault = false;
-    if (lat == null || lng == null) {
-      const def = await getDefaultAddress();
-      if (def) {
-        lat = def.lat;
-        lng = def.lng;
-        usedDefault = true;
-      }
+  async find_address({ query }) {
+    if (!(await ddCliAtLeast("0.2.3"))) {
+      return j({
+        candidates: [],
+        unsupported: true,
+        note: `Address lookup needs dd-cli >= 0.2.3. ${upgradeHint(await ddCliVersion())} Until then the user must add the address in the DoorDash app, after which it shows up in list_addresses.`,
+      });
     }
-    if (lat != null && lng != null) args.push("--lat", String(lat), "--lng", String(lng));
-    args.push("--limit", String(limit ?? 8));
+    const res = await ddJson(["address", "find", "--query", String(query)], { retryOnce: true });
+    return j(res);
+  },
+
+  async add_address({ place_id, printable_address }) {
+    // `address add` saves the address AND makes it the default delivery
+    // address — the same account-wide change set_default_address gates.
+    const ok = await confirmAction(
+      `The agent wants to SAVE a new delivery address and make it your ACCOUNT-WIDE default:\n  ${printable_address ?? place_id}\n(This persists across the DoorDash app/web until changed again.)`,
+    );
+    if (!ok) return j({ success: false, declined_by_user: true });
+    const res = await ddJson(["address", "add", "--place-id", String(place_id)]);
+    invalidateDefaultAddress();
+    return j(res);
+  },
+
+  async search_restaurants({
+    query,
+    lat,
+    lng,
+    address_id,
+    limit,
+    dashpass_only,
+    price_tier,
+    distance_preference,
+    max_eta_minutes,
+  }) {
+    const args = ["search", "-q", String(query)];
+    const location = await locationArgs({ address_id, lat, lng });
+    args.push(...location.args, "--limit", String(limit ?? 8));
+    // dd-cli >=0.2.5 filters. Passed through only when the model asked for
+    // one, so an older binary never sees a flag it can't parse unprompted.
+    if (dashpass_only) args.push("--dashpass-only");
+    for (const tier of (price_tier as number[]) ?? []) args.push("--price-tier", String(tier));
+    if (distance_preference) args.push("--distance-preference", String(distance_preference));
+    if (max_eta_minutes != null) args.push("--max-eta-minutes", String(max_eta_minutes));
+
     const res = await ddJson(args, { retryOnce: true });
     const stores = ((res.stores as any[]) ?? []).map((s) => ({
       store_id: s.store_id,
@@ -105,12 +244,27 @@ export const toolHandlers: Record<string, Handler> = {
       ...(String(s.is_link_out) === "True" || s.is_link_out === true
         ? { is_link_out: true }
         : {}),
+      // dd-cli >=0.2.5 pickup availability, per store.
+      ...(s.offers_pickup != null ? { offers_pickup: s.offers_pickup } : {}),
+      ...(s.asap_pickup_availability != null
+        ? { asap_pickup_availability: s.asap_pickup_availability }
+        : {}),
+      ...(s.scheduled_pickup_availability != null
+        ? { scheduled_pickup_availability: s.scheduled_pickup_availability }
+        : {}),
+      ...(s.next_open_time_asap_pickup_ms != null
+        ? { next_open_time_asap_pickup_ms: s.next_open_time_asap_pickup_ms }
+        : {}),
+      ...carryThrough(s),
     }));
-    return j({ stores, searched_near: usedDefault ? "default saved address" : "provided coords" });
+    return j({ stores, searched_near: location.searched_near });
   },
 
-  async get_menu({ store_id, filter }) {
-    const res = await ddJson(["menu", "--store-id", String(store_id)], { retryOnce: true });
+  async get_menu({ store_id, filter, address_id }) {
+    const res = await ddJson(
+      ["menu", "--store-id", String(store_id), ...(await addressIdArgs(address_id))],
+      { retryOnce: true },
+    );
     let items = ((res.items as MenuItemWire[]) ?? []).map(trimMenuItem);
     const total = items.length;
     if (filter) {
@@ -134,12 +288,14 @@ export const toolHandlers: Record<string, Handler> = {
       store_is_open: res.store_is_open,
       total_items: total,
       returned_items: items.length,
+      // Store-level promotions and order-ahead windows (dd-cli >=0.2.4/0.2.5).
+      ...carryThrough(res, ["items"]),
       ...(note ? { note } : {}),
       items,
     });
   },
 
-  async get_restaurant_item_details({ store_id, menu_id, item_id }) {
+  async get_restaurant_item_details({ store_id, menu_id, item_id, address_id }) {
     const cleanId = String(item_id).replace(/^i_/, "");
     const res = await ddJson([
       "restaurant-item-details",
@@ -149,6 +305,7 @@ export const toolHandlers: Record<string, Handler> = {
       String(menu_id),
       "--item-id",
       cleanId,
+      ...(await addressIdArgs(address_id)),
     ], { retryOnce: true });
     return j(res);
   },
@@ -374,10 +531,12 @@ export const toolHandlers: Record<string, Handler> = {
     return j(await ddJson(["order", "checkout-url", "--cart-uuid", String(cart_uuid)], { retryOnce: true }));
   },
 
-  async get_order_history({ max, days }) {
+  async get_order_history({ max, days, include_group_order }) {
     const args = ["order", "history"];
     if (max != null) args.push("--max", String(max));
     if (days != null) args.push("--days", String(days));
+    // dd-cli >=0.2.3: also return group orders the user hosted or joined.
+    if (include_group_order) args.push("--include-group-order");
     const res = await ddJson(args, { retryOnce: true });
     const orders = ((res.orders as any[]) ?? []).map((o) => ({
       order_uuid: o.order_uuid,
@@ -391,6 +550,10 @@ export const toolHandlers: Record<string, Handler> = {
       is_reorderable: o.is_reorderable,
       fulfillment_type: o.fulfillment_type,
       order_target: o.order_target,
+      // Group-order participation (dd-cli >=0.2.3) rides along when asked for.
+      ...Object.fromEntries(
+        Object.entries(o).filter(([k, v]) => /group/i.test(k) && v != null),
+      ),
     }));
     return j({ orders, page_full: res.page_full });
   },
@@ -441,11 +604,14 @@ export const toolHandlers: Record<string, Handler> = {
     return j(await ddJson(args));
   },
 
-  async find_stores({ vertical, max, lat, lng }) {
+  async find_stores({ vertical, max, lat, lng, address_id }) {
     const args = ["find-nearby-stores"];
     if (vertical) args.push("--vertical", String(vertical));
     if (max != null) args.push("--max", String(max));
-    if (lat != null && lng != null) args.push("--lat", String(lat), "--lng", String(lng));
+    // Unlike search, this command already defaults to the account address
+    // server-side, so only an explicit override is passed.
+    if (address_id) args.push("--address-id", String(address_id));
+    else if (lat != null && lng != null) args.push("--lat", String(lat), "--lng", String(lng));
     return j(await ddJson(args, { retryOnce: true }));
   },
 
@@ -558,16 +724,54 @@ const RAW_TOOLS: Anthropic.Tool[] = [
     },
   },
   {
+    name: "find_address",
+    description:
+      "Look up a street address the user typed and get back candidate addresses with place_ids. Use ONLY when the user wants to deliver somewhere not already in list_addresses — check that first. Nothing is saved: pass the chosen candidate's place_id to add_address.",
+    input_schema: {
+      type: "object",
+      properties: {
+        query: str("Address text as the user gave it, e.g. '1600 Amphitheatre Pkwy, Mountain View'"),
+      },
+      required: ["query"],
+    },
+  },
+  {
+    name: "add_address",
+    description:
+      "Save a candidate from find_address to the user's DoorDash account AND make it the ACCOUNT-WIDE default delivery address (persists across app/web). Prompts the user for approval first. Confirm the exact address with the user — including apartment/suite accuracy — before calling; a wrong address means a lost order.",
+    input_schema: {
+      type: "object",
+      properties: {
+        place_id: str("place_id of the chosen candidate from find_address"),
+        printable_address: str("Human-readable address, shown in the confirmation prompt"),
+      },
+      required: ["place_id", "printable_address"],
+    },
+  },
+  {
     name: "search_restaurants",
     description:
-      "Search nearby restaurants by free-text query. Defaults to the user's default saved address location when lat/lng omitted. Returns store_id, name, distance, delivery_time estimate, rating. Stores with is_link_out=true cannot be ordered through this agent. Restaurant-focused — use find_stores for grocery/retail/pharmacy/pets/alcohol.",
+      "Search nearby restaurants by free-text query. Searches from the user's default saved address unless address_id or lat/lng is given. Returns store_id, name, distance, delivery_time estimate, rating, and pickup availability (offers_pickup, asap/scheduled_pickup_availability, next_open_time_asap_pickup_ms — use these before promising pickup). Stores with is_link_out=true cannot be ordered through this agent. Restaurant-focused — use find_stores for grocery/retail/pharmacy/pets/alcohol. Filters (dashpass_only, price_tier, distance_preference, max_eta_minutes) narrow server-side — prefer them over asking for 30 results and filtering by hand.",
     input_schema: {
       type: "object",
       properties: {
         query: str("Search text, e.g. 'grilled chicken bowls'"),
-        lat: num("Optional latitude override"),
-        lng: num("Optional longitude override"),
+        address_id: str("Search from a saved address (list_addresses). Mutually exclusive with lat/lng; omit for the default address"),
+        lat: num("Optional latitude override (pass with lng, and without address_id)"),
+        lng: num("Optional longitude override (pass with lat, and without address_id)"),
         limit: int("Max results (default 8)"),
+        dashpass_only: bool("Only DashPass stores. Pass when the user says they have DashPass and wants to use it"),
+        price_tier: {
+          type: "array",
+          description: "Price tiers to include, 1 (cheapest) to 4 — e.g. [1,2] for 'somewhere cheap'",
+          items: { type: "integer" },
+        },
+        distance_preference: {
+          type: "string",
+          enum: ["nearby", "balanced", "broad"],
+          description: "How far to look: nearby for 'right around here', broad to widen a thin result set",
+        },
+        max_eta_minutes: int("Drop stores whose estimated delivery exceeds this many minutes — use when the user is in a hurry"),
       },
       required: ["query"],
     },
@@ -575,12 +779,13 @@ const RAW_TOOLS: Anthropic.Tool[] = [
   {
     name: "get_menu",
     description:
-      "Fetch a restaurant's menu: returns menu_id (needed for cart adds and item details), store_is_open, and items with item_id, name, description, price, category, has_required_modifiers, orderability. Large menus are capped — pass `filter` (case-insensitive substring on name/description/category) to narrow.",
+      "Fetch a restaurant's menu: returns menu_id (needed for cart adds and item details), store_is_open, the store's active promotions and which items qualify, order-ahead/schedule-ahead windows, and items with item_id, name, description, price, category, has_required_modifiers, orderability. Large menus are capped — pass `filter` (case-insensitive substring on name/description/category) to narrow.",
     input_schema: {
       type: "object",
       properties: {
         store_id: str("Store ID from search_restaurants or order history"),
         filter: str("Optional substring filter, e.g. 'chicken'"),
+        address_id: str("Saved address to price promos against (default: the user's default address). Promo eligibility depends on the delivery location"),
       },
       required: ["store_id"],
     },
@@ -588,13 +793,14 @@ const RAW_TOOLS: Anthropic.Tool[] = [
   {
     name: "get_restaurant_item_details",
     description:
-      "Full details for one restaurant menu item: price, description, and extras[] customization groups (each with options[] holding option_id choices, min/max selections). REQUIRED before adding any item with has_required_modifiers. Pass selected options[].option_id values as nested_options when adding to cart (never extra_id).",
+      "Full details for one restaurant menu item: price, description, any promotion it qualifies for, and extras[] customization groups (each with options[] holding option_id choices, min/max selections). REQUIRED before adding any item with has_required_modifiers. Pass selected options[].option_id values as nested_options when adding to cart (never extra_id).",
     input_schema: {
       type: "object",
       properties: {
         store_id: str("Restaurant store ID"),
         menu_id: str("menu_id from get_menu"),
         item_id: str("Item ID from get_menu (i_ prefix handled automatically)"),
+        address_id: str("Saved address to price promos against (default: the user's default address)"),
       },
       required: ["store_id", "menu_id", "item_id"],
     },
@@ -622,7 +828,7 @@ const RAW_TOOLS: Anthropic.Tool[] = [
   {
     name: "add_items_to_cart",
     description:
-      "Add items to a cart (creates one if no cart_uuid passed and none open at the store). APPEND semantics: re-adding an item_id SUMS quantities. Items need item_id + item_name + quantity; customizations go in nested_options[] (entries: id, name, quantity, optional recursive options[]). On required-options failure the response lists required_options[] — ask the user to choose, then retry. Check list_carts first.",
+      "Add items to a cart (creates one if no cart_uuid passed and none open at the store). APPEND semantics: re-adding an item_id SUMS quantities. Items need item_id + item_name + quantity; customizations go in nested_options[] (entries: id, name, quantity, optional recursive options[]). Weight-priced items (deli, butcher, produce) take a decimal quantity in their own unit — the final charge is by actual weight, so tell the user the price is an estimate. Items the merchant ships with default modifications keep them unless you pass default_handling 'exact'. On required-options failure the response lists required_options[] — ask the user to choose, then retry. Check list_carts first.",
     input_schema: {
       type: "object",
       properties: {
@@ -637,7 +843,14 @@ const RAW_TOOLS: Anthropic.Tool[] = [
             properties: {
               item_id: str("Menu item id"),
               item_name: str("Item display name"),
-              quantity: num("Quantity (integer for count items)"),
+              quantity: num("Quantity — integer for count items, decimal in the item's unit for weight-priced items (0.5 = half a pound where the unit is lb)"),
+              unit: str("Unit for a weight-priced item, as the menu/item details reported it (e.g. 'lb', 'kg'). Omit for count items"),
+              default_handling: {
+                type: "string",
+                enum: ["default", "exact"],
+                description:
+                  "How to treat the merchant's default modifications on this item: 'default' (omit) keeps them; 'exact' takes the item with only the nested_options listed here. Only pass 'exact' when the user asked for a plain/unmodified version",
+              },
               nested_options: {
                 type: "array",
                 description:
@@ -783,6 +996,7 @@ const RAW_TOOLS: Anthropic.Tool[] = [
       properties: {
         max: int("Max orders 1-100 (default 50)"),
         days: int("Window in days, up to 365 (default 90)"),
+        include_group_order: bool("Also return group orders the user hosted or joined — pass when the question is about a team/office/shared order"),
       },
       required: [],
     },
@@ -800,7 +1014,7 @@ const RAW_TOOLS: Anthropic.Tool[] = [
   {
     name: "get_order_status",
     description:
-      "Check whether a submitted order went through: successful | pending (check again) | action_required (user must verify in app) | failed | not_found.",
+      "Track a submitted order through its whole lifecycle: successful | pending (check again) | action_required (user must verify in app) | failed | not_found, plus placement and delivery/pickup progress, current ETA, late-delivery trend, actual delivery/pickup time, and the cancellation reason when one applies. Answer 'where is my order?' from this rather than guessing from the submit response.",
     input_schema: {
       type: "object",
       properties: { order_uuid: str("From submit response or order history") },
@@ -876,8 +1090,9 @@ const RAW_TOOLS: Anthropic.Tool[] = [
           description: "Merchant type (default grocery)",
         },
         max: int("Max stores (default 10)"),
-        lat: num("Optional latitude override (pass with lng)"),
-        lng: num("Optional longitude override (pass with lat)"),
+        address_id: str("Saved address to search from (list_addresses). Mutually exclusive with lat/lng"),
+        lat: num("Optional latitude override (pass with lng, and without address_id)"),
+        lng: num("Optional longitude override (pass with lat, and without address_id)"),
       },
       required: [],
     },

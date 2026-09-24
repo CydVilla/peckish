@@ -9,6 +9,48 @@ file's section for that version, every downloadable artifact, and a
 ## [Unreleased]
 
 ### Added
+- **dd-cli 0.2.3–0.2.5 support.** Peckish had been built against dd-cli 0.2.2;
+  three releases of new surface went unused. Now wired through:
+  - **Address lookup** (dd-cli 0.2.3): `find_address` resolves a typed address
+    to candidates and `add_address` saves the chosen one. Saving also makes it
+    the account-wide default, so it sits behind the same approval prompt as
+    `set_default_address`.
+  - **Group orders in history** (0.2.3): `get_order_history` takes
+    `include_group_order`, and group fields survive the response trim — team
+    and office orders were invisible before.
+  - **Full order lifecycle** (0.2.3): `get_order_status` now documents what it
+    actually returns — placement and delivery progress, current ETA, late
+    trend, actual delivery time, cancellation reason — so "where's my food?"
+    is answered from the CLI rather than inferred from the submit response.
+  - **Promo-aware menus** (0.2.4): `get_menu` and `get_restaurant_item_details`
+    pass `--address-id`, so the store's active promotions and the items that
+    qualify come back priced against the right delivery location.
+  - **Search from a saved address** (0.2.4): `search_restaurants` and
+    `find_stores` take `address_id`. Searching by coordinates alone dropped
+    the promo context; the saved address id is now preferred whenever the
+    installed dd-cli supports it.
+  - **Search filters** (0.2.5): `dashpass_only`, `price_tier`,
+    `distance_preference` and `max_eta_minutes` narrow server-side instead of
+    over-fetching and filtering in the prompt.
+  - **Pickup availability and schedule-ahead** (0.2.5): search results carry
+    `offers_pickup`, `asap_pickup_availability`,
+    `scheduled_pickup_availability` and `next_open_time_asap_pickup_ms`, and
+    order-ahead windows now reach the model — a store that is closed now gets
+    offered as a scheduled order instead of being dropped.
+  - **Weight-priced items and merchant defaults** (0.2.5): cart items take a
+    decimal `quantity` with a `unit`, and `default_handling: "exact"` opts out
+    of a merchant's default modifications. The strict tool schemas had made
+    both literally inexpressible.
+- **dd-cli version detection.** Peckish probes `dd-cli --version` once per
+  process, reports it in the session context, and gates the behaviours it
+  applies automatically (like pricing menus against your saved address) on a
+  confirmed version — so a newer Peckish keeps working on an older binary
+  instead of failing on an unknown flag. Flags asked for explicitly are still
+  passed through, so dd-cli's own error names the flag.
+- **Response fields added after this code was written now survive the trim.**
+  The menu/search trimmers were strict allowlists, which silently swallowed
+  every field dd-cli added; keys naming a promotion, discount, order-ahead
+  window or weight/unit now ride along.
 - **Linux (x86_64) support**, following dd-cli v0.2.2's Linux builds. The
   terminal, web and MCP surfaces all run on Linux — same tools, same order
   gate, same audit log. dd-cli is discovered at `~/.local/bin/dd-cli`,

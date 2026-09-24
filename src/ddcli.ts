@@ -11,7 +11,7 @@ import { execFile } from "node:child_process";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { existsSync } from "node:fs";
-import { installHint, signinHint } from "./platform.js";
+import { installHint, signinHint, parseVersion, compareVersions } from "./platform.js";
 
 const CANDIDATE_PATHS = [
   process.env.DD_CLI_PATH,
@@ -225,9 +225,26 @@ export async function listAddresses(): Promise<SavedAddress[]> {
   return (res.addresses as SavedAddress[]) ?? [];
 }
 
+/**
+ * The default address is read on nearly every call now — search needs it for
+ * location, menus and item details need it for promo eligibility — so it is
+ * held for the life of the process and dropped whenever Peckish changes it.
+ * Nothing else can change it mid-session except the DoorDash app, and a stale
+ * read there costs one wrong promo context, not a wrong order: delivery
+ * address comes from the cart, and preview_order restates it before submit.
+ */
+let defaultAddressCache: SavedAddress | null | undefined;
+
 export async function getDefaultAddress(): Promise<SavedAddress | null> {
+  if (defaultAddressCache !== undefined) return defaultAddressCache;
   const addresses = await listAddresses();
-  return addresses.find((a) => a.is_default) ?? null;
+  defaultAddressCache = addresses.find((a) => a.is_default) ?? null;
+  return defaultAddressCache;
+}
+
+/** Call after anything that changes which address is default. */
+export function invalidateDefaultAddress(): void {
+  defaultAddressCache = undefined;
 }
 
 /** One-line summary of open carts for the session context (best-effort). */
@@ -248,4 +265,43 @@ export async function openCartsLine(): Promise<string> {
   } catch {
     return "unknown";
   }
+}
+
+// ---------------------------------------------------------------------------
+// Version detection
+//
+// dd-cli gained flags in every release since 0.2.2 (--address-id in 0.2.4,
+// the search filters in 0.2.5, `address find/add` in 0.2.3). Passing a flag an
+// older binary doesn't know turns a useful request into a parse error, so
+// Peckish asks the binary what it is, once per process, and gates the
+// behaviours it applies *automatically* on a confirmed version.
+//
+// Flags the model asked for explicitly are always passed through: if the
+// binary is too old, dd-cli's own error names the flag, which is a far better
+// message than Peckish silently ignoring the request.
+// ---------------------------------------------------------------------------
+
+let versionProbe: Promise<string | null> | null = null;
+
+/** The installed dd-cli version, or null when it can't be determined. */
+export function ddCliVersion(): Promise<string | null> {
+  versionProbe ??= execDd(["--version"])
+    .then(({ stdout, stderr }) => parseVersion(`${stdout}\n${stderr}`))
+    .catch(() => null);
+  return versionProbe;
+}
+
+/** Only for tests: forget the cached probe. */
+export function resetVersionCache(): void {
+  versionProbe = null;
+}
+
+/**
+ * True only when the installed dd-cli is known to be >= `min`. An unknown
+ * version answers false — automatic upgrades stay off until we can prove the
+ * binary supports them.
+ */
+export async function ddCliAtLeast(min: string): Promise<boolean> {
+  const v = await ddCliVersion();
+  return v != null && compareVersions(v, min) >= 0;
 }
