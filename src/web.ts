@@ -31,6 +31,7 @@ import {
   getDefaultAddress,
   listAddresses,
   openCartsLine,
+  ddCliVersion,
   resolveDdCliPath,
   ddJson,
   DdCliError,
@@ -143,6 +144,7 @@ async function handleMessage(text: string): Promise<void> {
       defaultAddressLine: addressLine,
       timezone,
       openCartsLine: bootCartsLine,
+      ddCliVersion: await ddCliVersion(),
     });
   }
   const stamped = `[${nowStamp()}] ${text}`;

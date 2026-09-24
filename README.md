@@ -78,8 +78,11 @@ ending 1234. Suggested Dasher tip is $3.50 — that, another amount, or none?
   your DoorDash session.
 - **Node.js 20+** — `node --version` to check; install from nodejs.org or brew.
 - **DoorDash CLI access** (currently waitlist-gated by DoorDash). Peckish
-  0.4.0 requires **dd-cli ≥ 0.2.1** — on Linux, **≥ 0.2.2**, the first release
-  with Linux builds. Download the release from
+  requires **dd-cli ≥ 0.2.1** — on Linux, **≥ 0.2.2**, the first release
+  with Linux builds — and targets **≥ 0.2.5**, the current release. Older
+  binaries still order fine; Peckish reads `dd-cli --version` at startup and
+  turns off only what that build can't do (see
+  [dd-cli versions](#dd-cli-versions)). Download the release from
   [doordash-oss/doordash-cli](https://github.com/doordash-oss/doordash-cli/releases),
   **verify the SHA256 checksum against the published value**, then:
   ```sh
@@ -346,8 +349,49 @@ surface authenticates without a keychain or a browser.
   my credits" to opt out for an order.
 - **Enterprise chains** (new): Domino's, Sweetgreen, Dave's Hot Chicken and
   other big chains are now orderable (dd-cli ≥ 0.2.1).
+- **Search filters** (new): "somewhere cheap that can be here in 30 minutes"
+  narrows server-side — DashPass-only, price tier, max ETA, search radius —
+  instead of pulling 30 results and sifting.
+- **Promo-aware menus** (new): menus and item details carry the store's live
+  promotions and which items qualify, priced against the delivery address, so
+  a deal gets offered while you're still choosing rather than at checkout.
+- **Pickup at a glance** (new): search results say per store whether pickup is
+  available now, schedulable, or opens later — useful when the fees annoy you.
+- **Schedule ahead** (new): a store that's closed now is offered as "opens at
+  6, I can schedule it" instead of being dropped from the results.
+- **Weight-priced items** (new): deli, butcher and produce items take a decimal
+  quantity in their own unit, and Peckish tells you the total is an estimate
+  because the charge follows the actual weight.
+- **Address lookup** (new): deliver somewhere that isn't saved yet — Peckish
+  resolves the address, has you pick the exact match, and asks before saving it
+  (it becomes your account default).
+- **Live order tracking** (new): "where's my food?" answers from the full
+  lifecycle — placement, progress, current ETA, late trend, cancellation
+  reason — not just "did it go through".
 - Work benefits (company budgets + expense codes), scheduled delivery,
-  pickup, groceries/retail/pets/alcohol.
+  pickup, groceries/retail/pets/alcohol, group order history.
+
+## dd-cli versions
+
+dd-cli is a separate binary on its own release cadence, and every release since
+0.2.2 has added flags. Peckish probes `dd-cli --version` once per process and
+degrades instead of breaking:
+
+| dd-cli | What it unlocks in Peckish |
+|---|---|
+| ≥ 0.2.1 | Baseline: `--intent` on every command, enterprise chains |
+| ≥ 0.2.2 | Linux builds, `export-token` headless sign-in |
+| ≥ 0.2.3 | `find_address` / `add_address`, full order-status lifecycle, group orders in history |
+| ≥ 0.2.4 | Promotions on menus and item details, searching from a saved `address_id` |
+| ≥ 0.2.5 | Search filters, per-store pickup availability, schedule-ahead windows, weight-priced items |
+
+Behaviour Peckish applies *on its own* — like pricing menus against your saved
+address so promo eligibility is right — stays off until the version check
+confirms the binary supports it. A flag the model asked for explicitly is
+always passed through, so an old binary answers with its own error naming the
+flag rather than Peckish silently ignoring the request. The detected version
+goes into the session context, so the assistant knows what it can offer and
+suggests an upgrade only when you ask for something the binary can't do.
 
 ## Architecture
 

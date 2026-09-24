@@ -19,11 +19,13 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import { tools, toolHandlers } from "./tools.js";
 import { setConfirmationProviders } from "./confirm.js";
-import { getDefaultAddress, setCallIntent } from "./ddcli.js";
+import { getDefaultAddress, setCallIntent, ddCliVersion } from "./ddcli.js";
 import { listPreferences, preferencesFilePath } from "./prefs.js";
+import { ddCliVersionLine } from "./platform.js";
 
 const READ_ONLY = new Set([
   "list_addresses",
+  "find_address",
   "search_restaurants",
   "get_menu",
   "get_restaurant_item_details",
@@ -40,10 +42,10 @@ const READ_ONLY = new Set([
   "get_grocery_item_details",
   "get_session_context",
 ]);
-const DESTRUCTIVE = new Set(["submit_order", "delete_cart", "set_default_address"]);
+const DESTRUCTIVE = new Set(["submit_order", "delete_cart", "set_default_address", "add_address"]);
 
 /** Tools that must never run when the client can't render a confirmation dialog. */
-const REQUIRES_ELICITATION = new Set(["submit_order", "set_default_address"]);
+const REQUIRES_ELICITATION = new Set(["submit_order", "set_default_address", "add_address"]);
 
 const INSTRUCTIONS = `Peckish orders food on DoorDash for the signed-in user. Operating rules:
 
@@ -55,12 +57,17 @@ const INSTRUCTIONS = `Peckish orders food on DoorDash for the signed-in user. Op
 - WORK BENEFITS: any work/office/company/team/expense signal → preview with include_work_benefits; offer eligible budgets by name + remaining, never apply silently.
 - NON-RESTAURANT (grocery/retail/pets/alcohol/pharmacy): use find_stores + find_items or build_grocery_list — restaurant search won't find these. build_grocery_list's available_stores[] lets you re-price the same list at another store when the user wants to compare.
 - COMPARING FINALISTS: when the user cares about cost/fees or two candidates are close, build a cart at each finalist (max 3 — the one-cart limit is per store), preview each, present total + fee share + ETA with a recommendation, then delete_cart every cart the user doesn't keep and say so. Never leave stray comparison carts.
-- PROMOS & FEES: one list_promos call before presenting a store's preview is worth it — offer eligible promos (check stated minimums), never apply silently, re-preview after. Mention applied DoorDash credits. Pickup often dodges delivery fees — compare when fees bother the user and the store is close.
-- HISTORY: derive "my usual" from get_order_history frequency and confirm your interpretation before reordering. If list_carts shows an old cart (days+), mention it and ask whether to resume or clean up. Spending questions: get_order_history + get_receipt per order, fees and tips broken out honestly.
+- PROMOS & FEES: get_menu and get_restaurant_item_details already carry the store's active promotions and the items that qualify (priced against the delivery address) — read those first; one list_promos call before presenting a store's preview is still worth it — offer eligible promos (check stated minimums), never apply silently, re-preview after. Mention applied DoorDash credits. Pickup often dodges delivery fees — compare when fees bother the user and the store is close.
+- HISTORY: pass include_group_order for team/office/shared-order questions; derive "my usual" from get_order_history frequency and confirm your interpretation before reordering. If list_carts shows an old cart (days+), mention it and ask whether to resume or clean up. Spending questions: get_order_history + get_receipt per order, fees and tips broken out honestly.
 - INTENT: every tool requires an "intent" — one short goal line ("Help the user order dinner"). It is sent to DoorDash. Keep it generic: never include the user's verbatim words, dietary/health/religious details, budgets, or names.
 - GROUP CARTS: add_items_to_cart with group_cart creates a shareable cart (share the response's group_cart_url); spend_limit_cents caps per-participant spend on a new host-pays cart; joining someone's cart = their cart_uuid + group_cart. Host previews/submits; confirm participants are done first.
 - PRIORITY (express) DELIVERY: preview with priority and confirm quote.delivery_availability.delivery_options[] has delivery_option_type "PRIORITY" before promising; delivery-only, not with pickup/scheduled; same flag at submit.
 - CREDITS: apply by default — never prompt; only pass no_apply_credits (preview AND submit) when the user explicitly opts out.
+- SEARCH FILTERS: narrow server-side rather than by hand — dashpass_only when the user has DashPass, price_tier for "cheap"/"nice", max_eta_minutes when they are in a hurry, distance_preference "broad" to widen a thin result set.
+- PICKUP: search results carry offers_pickup and asap/scheduled_pickup_availability per store — check them before offering pickup, and next_open_time_asap_pickup_ms when the store is closed now.
+- SCHEDULE AHEAD: search, get_menu and add_items_to_cart surface order-ahead windows; when ASAP is unavailable, offer concrete slots and pass the same scheduled_time to preview AND submit.
+- WEIGHT-PRICED ITEMS: deli/butcher/produce items take a decimal quantity in their own unit and are charged by actual weight — say the total is an estimate. Items with merchant default modifications keep them unless the user wants it plain, which is default_handling "exact".
+- NEW ADDRESSES: check list_addresses first; only if it is genuinely not there, find_address the text the user gave, confirm the exact candidate (apartment/suite included), then add_address — which also makes it the account default and asks the user to approve.
 - Enterprise chains (Domino's, Sweetgreen, …) are orderable; still skip is_link_out stores.
 - SIGN-IN: when a tool fails with "sign-in is missing or expired", offer start_signin — after the user approves a confirmation dialog it opens the DoorDash sign-in in their browser and polls until it completes (call again on login_in_progress; it never opens a second window). Then retry what failed. Only point at running \`dd-cli login\` manually if they decline or the dialog is unavailable. On browser_signin_unavailable (headless Linux host, no browser) stop calling it and relay its note instead: mint a token with \`dd-cli export-token\` on a machine with a browser, set DD_CLI_ACCESS_TOKEN in the environment running Peckish, then retry.
 - Start sessions by calling get_session_context (address, saved dietary preferences, local time) and honor saved preferences; save new durable ones with save_preference.
@@ -162,6 +169,7 @@ async function getSessionContext(): Promise<string> {
       : "unknown — DoorDash sign-in may be needed (offer the start_signin tool; manual fallback: `dd-cli login` in a terminal)",
     saved_preferences: listPreferences(),
     preferences_file: preferencesFilePath(),
+    dd_cli_version: ddCliVersionLine(await ddCliVersion().catch(() => null)),
     local_time: new Date().toLocaleString("en-US", {
       weekday: "short",
       month: "short",

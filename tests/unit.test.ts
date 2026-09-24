@@ -5,7 +5,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { stripUiFields, isTransient, formatIntent, DdCliError } from "../src/ddcli.js";
-import { tools, strictifySchema, trimMenuItem } from "../src/tools.js";
+import { tools, strictifySchema, trimMenuItem, carryThrough, carriesSignal } from "../src/tools.js";
 import { addUsage, EMPTY_USAGE, estimateCostUsd, formatCost } from "../src/costs.js";
 import { isAuthError } from "../src/signin.js";
 import {
@@ -14,6 +14,10 @@ import {
   canBrowserSignin,
   signinHint,
   installHint,
+  parseVersion,
+  compareVersions,
+  ddCliVersionLine,
+  DD_CLI_RECOMMENDED_VERSION,
 } from "../src/platform.js";
 
 // ---------------------------------------------------------------------------
@@ -272,4 +276,135 @@ test("estimateCostUsd prices sonnet-5 correctly incl. cache rates", () => {
 test("formatCost floors tiny amounts", () => {
   assert.equal(formatCost(0.001), "<$0.01");
   assert.equal(formatCost(0.12), "~$0.12");
+});
+
+// ---------------------------------------------------------------------------
+// platform: dd-cli version detection (gates the >=0.2.3 features)
+// ---------------------------------------------------------------------------
+
+test("parseVersion reads the version out of whatever --version prints", () => {
+  assert.equal(parseVersion("dd-cli 0.2.5"), "0.2.5");
+  assert.equal(parseVersion("dd-cli version v0.2.5 (darwin-arm64)"), "0.2.5");
+  assert.equal(parseVersion("0.2.5\n"), "0.2.5");
+  assert.equal(parseVersion("dd-cli/0.2.5-rc1"), "0.2.5");
+  assert.equal(parseVersion("no version here"), null);
+});
+
+test("compareVersions orders releases numerically, not lexically", () => {
+  assert.ok(compareVersions("0.2.5", "0.2.4") > 0);
+  assert.ok(compareVersions("0.2.10", "0.2.9") > 0, "10 > 9, not '1' < '9'");
+  assert.equal(compareVersions("0.2.5", "0.2.5"), 0);
+  assert.ok(compareVersions("0.2.2", "0.2.5") < 0);
+  assert.ok(compareVersions("0.3", "0.2.9") > 0, "missing components count as 0");
+});
+
+test("ddCliVersionLine names exactly the features an old binary is missing", () => {
+  assert.equal(ddCliVersionLine(DD_CLI_RECOMMENDED_VERSION), DD_CLI_RECOMMENDED_VERSION);
+  assert.equal(ddCliVersionLine("0.3.0"), "0.3.0", "a newer binary needs no caveat");
+  assert.equal(ddCliVersionLine(null), "unknown");
+
+  const old = ddCliVersionLine("0.2.2");
+  assert.match(old, /find_address/);
+  assert.match(old, /promo-aware menus/);
+  assert.match(old, /search filters/);
+
+  const mid = ddCliVersionLine("0.2.4");
+  assert.doesNotMatch(mid, /find_address/, "0.2.4 has address lookup");
+  assert.doesNotMatch(mid, /promo-aware menus/, "0.2.4 has promo-aware menus");
+  assert.match(mid, /search filters/, "but not the 0.2.5 filters");
+});
+
+// ---------------------------------------------------------------------------
+// tools: carry-through of fields dd-cli added after this code was written
+// ---------------------------------------------------------------------------
+
+test("carryThrough keeps promo/schedule/weight signal and drops the rest", () => {
+  const kept = carryThrough({
+    promotions: [{ id: "p1" }],
+    qualifying_promotion_id: "p1",
+    order_ahead_available: true,
+    schedule_ahead_windows: [{ start: 1 }],
+    weight_unit: "lb",
+    purchase_type: "MEASUREMENT",
+    telemetry_blob: "x".repeat(5000),
+    internal_ranking_score: 0.42,
+    community_rating: 4.6,
+  });
+  assert.deepEqual(Object.keys(kept).sort(), [
+    "order_ahead_available",
+    "promotions",
+    "purchase_type",
+    "qualifying_promotion_id",
+    "schedule_ahead_windows",
+    "weight_unit",
+  ]);
+});
+
+test("carriesSignal matches whole tokens, not substrings", () => {
+  assert.ok(carriesSignal("qualifying_promotion_id"));
+  assert.ok(carriesSignal("orderAheadAvailable") === false, "camelCase is not how dd-cli names fields");
+  assert.equal(carriesSignal("community_rating"), false, "'community' contains 'unit'");
+  assert.equal(carriesSignal("opportunity_id"), false, "'opportunity' contains 'unit'");
+});
+
+test("carryThrough skips explicitly-handled keys and nulls", () => {
+  const out = carryThrough({ items: [1, 2, 3], promotions: null, discount_text: "20% off" }, ["items"]);
+  assert.deepEqual(out, { discount_text: "20% off" });
+});
+
+test("trimMenuItem carries a promotion through the allowlist", () => {
+  const item = trimMenuItem({
+    item_id: "i_1",
+    name: "Bowl",
+    price: 12,
+    promotion: { text: "20% off" },
+    junk_field: "dropped",
+  });
+  assert.deepEqual((item as any).promotion, { text: "20% off" });
+  assert.equal((item as any).junk_field, undefined);
+});
+
+// ---------------------------------------------------------------------------
+// tools: the dd-cli 0.2.3-0.2.5 surface is actually exposed to the model
+// ---------------------------------------------------------------------------
+
+const toolNamed = (name: string) => {
+  const t = tools.find((x) => x.name === name);
+  assert.ok(t, `tool ${name} is missing`);
+  return t!;
+};
+const propsOf = (name: string) =>
+  (toolNamed(name).input_schema.properties ?? {}) as Record<string, any>;
+
+test("address lookup tools exist and add_address is treated as a mutation", () => {
+  assert.ok(propsOf("find_address").query);
+  const add = propsOf("add_address");
+  assert.ok(add.place_id);
+  assert.ok(add.printable_address, "the confirmation prompt needs something readable to show");
+  assert.match(toolNamed("add_address").description!, /default/i);
+});
+
+test("search exposes the 0.2.5 filters and the 0.2.4 address_id", () => {
+  const p = propsOf("search_restaurants");
+  assert.ok(p.address_id);
+  assert.ok(p.dashpass_only);
+  assert.equal(p.price_tier.type, "array");
+  assert.deepEqual(p.distance_preference.enum, ["nearby", "balanced", "broad"]);
+  assert.ok(p.max_eta_minutes);
+});
+
+test("menu and item details can be priced against a chosen address", () => {
+  assert.ok(propsOf("get_menu").address_id);
+  assert.ok(propsOf("get_restaurant_item_details").address_id);
+});
+
+test("cart adds can express weight-priced items and exact modifications", () => {
+  const item = (propsOf("add_items_to_cart").items.items.properties ?? {}) as Record<string, any>;
+  assert.ok(item.unit);
+  assert.deepEqual(item.default_handling.enum, ["default", "exact"]);
+  assert.match(item.quantity.description, /decimal/i);
+});
+
+test("order history can include group orders", () => {
+  assert.ok(propsOf("get_order_history").include_group_order);
 });
