@@ -24,6 +24,10 @@ file's section for that version, every downloadable artifact, and a
   reports which flags the installed binary accepts and prints the field names
   the responses actually carry, so the promo/order-ahead/weight key patterns
   in `src/tools.ts` can be replaced with certainty.
+- **`docs/dd-cli-verification.md`** — the checklist for acting on what
+  `verify-dd-cli.mjs` reports: which flag names to correct and where, how to
+  reconcile the real response field names against the trimmers' token set, and
+  which two write paths stay unexercised without explicit consent.
 - **`scripts/check-dd-cli-release.mjs` and a weekly release-watch workflow.**
   Peckish sat three dd-cli releases behind before anyone noticed; this checks
   the published releases against `DD_CLI_RECOMMENDED_VERSION` every Monday and

@@ -396,7 +396,8 @@ node scripts/check-dd-cli-release.mjs   # is a newer dd-cli out?
 signed-in binary and reports which flags it accepts and what field names the
 responses carry. It is read-only — no carts, no saved addresses, no orders.
 Run it after a dd-cli upgrade, or when something Peckish sends comes back
-rejected. `check-dd-cli-release.mjs` runs weekly in CI and files an issue when
+rejected — [docs/dd-cli-verification.md](docs/dd-cli-verification.md) is the
+checklist for acting on what it reports. `check-dd-cli-release.mjs` runs weekly in CI and files an issue when
 dd-cli publishes a release newer than the one Peckish targets.
 
 Behaviour Peckish applies *on its own* — like pricing menus against your saved
