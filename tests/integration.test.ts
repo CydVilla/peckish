@@ -201,12 +201,16 @@ test("search results keep pickup availability and drop ranking noise", async () 
 
 test("menus keep store promotions, item promos and weight units", async () => {
   const res = await run("get_menu", { store_id: "store_1" });
-  assert.deepEqual(res.promotions, [{ id: "promo_1", text: "20% off orders over $25" }]);
-  assert.ok(res.schedule_ahead_windows, "order-ahead windows reach the model");
+  assert.deepEqual(res.promotions, [
+    { title: "20% off $25+", description: "Spend $25, save 20%", code: "SAVE20" },
+  ]);
+  assert.equal(res.supports_order_ahead, true, "order-ahead flag reaches the model");
+  assert.equal(res.store_next_open_time, 1790000000000, "next opening time reaches the model");
   assert.equal(res.internal_experiment_bucket, undefined, "but internals do not");
 
   const [ramen, pork] = res.items;
-  assert.equal(ramen.qualifying_promotion_id, "promo_1");
+  assert.deepEqual(ramen.applicable_promotion_ids, ["SAVE20"]);
+  assert.deepEqual(ramen.orderability, ["asap", "schedule_ahead"], "get_menu's description promises this");
   assert.equal(ramen.telemetry_blob, undefined);
   assert.equal(pork.weight_unit, "lb");
   assert.equal(pork.purchase_type, "MEASUREMENT");
@@ -241,6 +245,58 @@ test("order history asks for group orders and keeps their fields", async () => {
   assert.ok(callFor("order", "history").includes("--include-group-order"));
   assert.equal(res.orders[0].is_group_order, true);
   assert.equal(res.orders[0].group_order_role, "HOST");
+});
+
+test("order history rows carry the real date fields and item ids", async () => {
+  const res = await run("get_order_history", {});
+  const row = res.orders[0];
+  // Regression: the mapper read `created_at`, which dd-cli never returns, so
+  // every row came back undated.
+  assert.equal(row.order_date, "2026-08-26T23:39:31.029Z");
+  assert.equal(row.order_fulfilled_at, "2026-08-26T23:57:15.541Z");
+  assert.equal(row.created_at, undefined, "created_at is not a dd-cli field");
+  assert.equal(row.items[0].item_id, "37275430436", "item_id was being dropped");
+});
+
+test("submit_order learns the outcome from result.status", async () => {
+  const confirm = await import("../src/confirm.js");
+  confirm.setConfirmationProviders({ order: async () => true, action: async () => true });
+  const res = await run("submit_order", {
+    cart_uuid: "cart_1",
+    tip_cents: 500,
+    confirmation_summary: "1x Tonkotsu Ramen, $22.10 total, $5 tip",
+  });
+  // Regression: the poll read `finalStatus.status`, which never exists, so it
+  // burned all 8 attempts and reported nothing the model could act on.
+  assert.equal(res.final_status.result.status, "completed");
+  assert.equal(res.lifecycle.order_created, true);
+  assert.equal(res.lifecycle.keep_polling, false);
+  assert.match(res.note, /lifecycle\.order_created/, "the note must point at the derived flag");
+  assert.match(res.note, /result\.status/, "and at where the status really lives");
+});
+
+test("order status is read from result.status, not the top level", async () => {
+  const res = await run("get_order_status", { order_uuid: "order_1" });
+  // The payload nests under `result`; a top-level `status` never exists.
+  assert.equal(res.status, undefined);
+  assert.equal(res.result.status, "completed");
+  assert.equal(res.lifecycle.status, "completed");
+  assert.equal(res.lifecycle.order_created, true);
+  assert.equal(res.lifecycle.is_terminal, true);
+  assert.equal(res.lifecycle.keep_polling, false);
+  // The fields the tool description promises must survive the passthrough.
+  assert.ok("eta_trend" in res.result);
+  assert.ok("late_reason" in res.result);
+  assert.ok("cancellation_reason" in res.result);
+  assert.equal(res.result.actual_delivery_time, "2026-08-26T23:57:15.541Z");
+});
+
+test("menu items carry popularity, which Peckish used to deny existed", async () => {
+  const res = await run("get_menu", { store_id: "store_1" });
+  const ramen = res.items[0];
+  assert.equal(ramen.is_popular, true);
+  assert.equal(ramen.popularity_rank, 2);
+  assert.deepEqual(ramen.popular_modifications, ["extra chashu"]);
 });
 
 test("order history omits the flag by default", async () => {

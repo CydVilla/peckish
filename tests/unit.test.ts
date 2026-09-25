@@ -6,7 +6,14 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { stripUiFields, isTransient, formatIntent, findGuestToken, DdCliError } from "../src/ddcli.js";
 import { guestKey } from "../src/guests.js";
-import { tools, strictifySchema, trimMenuItem, carryThrough, carriesSignal } from "../src/tools.js";
+import {
+  tools,
+  strictifySchema,
+  trimMenuItem,
+  carryThrough,
+  carriesSignal,
+  classifyOrderStatus,
+} from "../src/tools.js";
 import { addUsage, EMPTY_USAGE, estimateCostUsd, formatCost } from "../src/costs.js";
 import { isAuthError } from "../src/signin.js";
 import {
@@ -458,4 +465,64 @@ test("guest sub-cart params are exposed on the cart tool, tokens are not", () =>
     "the model must have no way to supply or receive a token",
   );
   assert.ok(tools.some((t) => t.name === "list_cart_guests"));
+});
+
+// ---------------------------------------------------------------------------
+// order status lifecycle — shape confirmed live against dd-cli 0.2.5
+// ---------------------------------------------------------------------------
+
+test("classifyOrderStatus reads result.status, never a top-level status", () => {
+  // The flat shape is what Peckish wrongly assumed; it must not be honoured.
+  assert.equal(classifyOrderStatus({ status: "completed" }).not_found, true);
+  assert.equal(classifyOrderStatus({ result: { status: "completed" } }).status, "completed");
+});
+
+test("classifyOrderStatus keeps polling while processing or mid-delivery", () => {
+  for (const status of ["pending", "store_confirmed", "dasher_assigned", "dasher_nearby"]) {
+    const c = classifyOrderStatus({ result: { status } });
+    assert.equal(c.keep_polling, true, `${status} should keep polling`);
+    assert.equal(c.is_terminal, false, `${status} is not terminal`);
+  }
+});
+
+test("classifyOrderStatus treats placed and later stages as created", () => {
+  for (const status of ["placed", "store_confirmed", "picked_up", "completed"]) {
+    assert.equal(classifyOrderStatus({ result: { status } }).order_created, true, status);
+  }
+});
+
+test("classifyOrderStatus stops at every terminal status", () => {
+  for (const status of ["completed", "cancelled", "action_required", "order_declined"]) {
+    const c = classifyOrderStatus({ result: { status } });
+    assert.equal(c.is_terminal, true, `${status} should be terminal`);
+    assert.equal(c.keep_polling, false, `${status} should stop the poll`);
+  }
+});
+
+test("classifyOrderStatus does not call a cancelled order created", () => {
+  const c = classifyOrderStatus({ result: { status: "cancelled" } });
+  assert.equal(c.order_created, false);
+  assert.equal(c.is_terminal, true);
+});
+
+test("classifyOrderStatus rejects the vocabulary 0.2.3 removed", () => {
+  for (const status of ["successful", "failed"]) {
+    assert.equal(classifyOrderStatus({ result: { status } }).order_created, false, status);
+  }
+});
+
+test("classifyOrderStatus reports a missing status as not_found and terminal", () => {
+  for (const payload of [{}, null, undefined, { result: {} }, { result: { status: "" } }]) {
+    const c = classifyOrderStatus(payload as any);
+    assert.equal(c.not_found, true);
+    assert.equal(c.is_terminal, true);
+    assert.equal(c.keep_polling, false);
+  }
+});
+
+test("popularity keys carry through the menu trimmer", () => {
+  for (const k of ["is_popular", "popularity_rank", "popular_modifications"]) {
+    assert.equal(carriesSignal(k), true, `${k} must reach the model`);
+  }
+  assert.equal(carriesSignal("popsicle_id"), false, "substring matches must not qualify");
 });

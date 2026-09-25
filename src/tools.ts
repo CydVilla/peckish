@@ -71,6 +71,16 @@ const CARRY_THROUGH_TOKENS = new Set([
   "deals",
   "savings",
   "ahead",
+  // `items[].orderability` (0.2.5) is a whole token that matches none of the
+  // concept words above — verified against dd-cli 0.2.5's own `menu --help`,
+  // which names it. Without this the menu trimmer dropped it while
+  // get_menu's description promised the model it was there.
+  "orderability",
+  // Confirmed live on 0.2.5: menu items carry is_popular, popularity_rank and
+  // popular_modifications. Peckish used to assert to the model that no
+  // popularity data exists while dropping these three fields.
+  "popular",
+  "popularity",
   "weight",
   "unit",
   "units",
@@ -87,6 +97,53 @@ export function carriesSignal(key: string): boolean {
     .toLowerCase()
     .split(/[^a-z0-9]+/)
     .some((token) => CARRY_THROUGH_TOKENS.has(token));
+}
+
+// ---------------------------------------------------------------------------
+// Order status (dd-cli >=0.2.3; shape confirmed live against 0.2.5)
+//
+// The payload nests the order under `result` — {result: {status, eta_trend,
+// late_reason, cancellation_reason, actual_delivery_time, ...}, success,
+// message}. There is NO top-level `status`, and the pre-0.2.3 values
+// `successful`/`failed` no longer exist: an order that clears processing
+// reports `placed` and then moves through delivery stages to `completed`.
+// ---------------------------------------------------------------------------
+
+/** Delivery/pickup stages between `placed` and a terminal status. */
+const IN_PROGRESS_STATUSES = new Set([
+  "scheduled",
+  "store_confirmed",
+  "ready_for_pickup",
+  "dasher_assigned",
+  "dasher_at_store",
+  "picked_up",
+  "dasher_nearby",
+]);
+
+/** Nothing further changes on its own — stop polling. */
+const TERMINAL_STATUSES = new Set(["action_required", "order_declined", "completed", "cancelled"]);
+
+/**
+ * The order exists and stands. `cancelled` is excluded on purpose: it was
+ * placed and then cancelled, so reporting it as created would mislead.
+ */
+const ORDER_CREATED_STATUSES = new Set(["placed", "completed", ...IN_PROGRESS_STATUSES]);
+
+export function classifyOrderStatus(payload: Record<string, unknown> | null | undefined) {
+  const result = (payload?.result ?? null) as Record<string, unknown> | null;
+  const raw = result?.status;
+  const status = typeof raw === "string" ? raw.toLowerCase() : "";
+  if (!status) {
+    // No status at all is how dd-cli reports an unknown order UUID.
+    return { status: null, order_created: false, is_terminal: true, keep_polling: false, not_found: true };
+  }
+  return {
+    status,
+    order_created: ORDER_CREATED_STATUSES.has(status),
+    is_terminal: TERMINAL_STATUSES.has(status),
+    keep_polling: status === "pending" || IN_PROGRESS_STATUSES.has(status),
+    not_found: false,
+  };
 }
 
 export function carryThrough(
@@ -290,6 +347,10 @@ export const toolHandlers: Record<string, Handler> = {
       store_name: res.store_name,
       menu_id: res.menu_id,
       store_is_open: res.store_is_open,
+      // Named by `menu --help` in 0.2.5 and matched by no CARRY_THROUGH token;
+      // picked explicitly rather than widening the set with "open"/"time",
+      // which would drag unrelated timestamp fields through every menu.
+      store_next_open_time: res.store_next_open_time,
       total_items: total,
       returned_items: items.length,
       // Store-level promotions and order-ahead windows (dd-cli >=0.2.4/0.2.5).
@@ -608,20 +669,23 @@ export const toolHandlers: Record<string, Handler> = {
           finalStatus = await ddJson(["order", "status", "--order-uuid", orderUuid], {
             retryOnce: true,
           });
-          const s = String(finalStatus.status ?? "").toLowerCase();
-          if (s && s !== "pending") break;
+          // Was `finalStatus.status`, which is always undefined — the status
+          // sits at result.status, so this loop used to burn all 8 attempts
+          // (40s) on every submit and never learn the outcome.
+          if (!classifyOrderStatus(finalStatus).keep_polling) break;
         } catch {
           break;
         }
       }
     }
-    if (String((finalStatus?.status ?? submitRes.success) || "").match(/^(successful|true)$/i)) {
+    if (classifyOrderStatus(finalStatus).order_created || submitRes.success === true) {
       forgetCart(String(cart_uuid)); // submit consumes the cart, guests and all
     }
     return j({
       submit_response: submitRes,
       final_status: finalStatus,
-      note: "Only report the order as placed if final_status.status is 'successful'. On 'action_required' the user must finish verification in the DoorDash app; on 'failed' it did not go through.",
+      lifecycle: classifyOrderStatus(finalStatus),
+      note: "Only report the order as placed if lifecycle.order_created is true. The status lives at final_status.result.status ('placed', or a later delivery/pickup stage); there is no top-level status and no 'successful' value. On 'action_required' the user must finish verification in the DoorDash app; on 'order_declined' it did not go through; on 'cancelled' it was placed and then cancelled.",
     });
   },
 
@@ -640,10 +704,17 @@ export const toolHandlers: Record<string, Handler> = {
       order_uuid: o.order_uuid,
       store_id: o.store_id,
       store_name: o.store_name,
-      created_at: o.created_at,
+      // `created_at` never existed — 0.2.5 returns order_date and
+      // order_fulfilled_at, so every history row used to come back undated.
+      order_date: o.order_date,
+      order_fulfilled_at: o.order_fulfilled_at,
       items: ((o.items as any[]) ?? []).map((it: any) =>
-        typeof it === "string" ? it : { name: it.name, quantity: it.quantity, price: it.price },
+        typeof it === "string"
+          ? it
+          : { item_id: it.item_id, name: it.name, quantity: it.quantity, price: it.price },
       ),
+      // Restaurant history rows carry no total on 0.2.5 — kept in case another
+      // vertical does; get_receipt is the reliable source for money.
       total: o.total ?? o.order_total,
       is_reorderable: o.is_reorderable,
       fulfillment_type: o.fulfillment_type,
@@ -661,7 +732,10 @@ export const toolHandlers: Record<string, Handler> = {
   },
 
   async get_order_status({ order_uuid }) {
-    return j(await ddJson(["order", "status", "--order-uuid", String(order_uuid)], { retryOnce: true }));
+    const res = await ddJson(["order", "status", "--order-uuid", String(order_uuid)], { retryOnce: true });
+    // Raw `result` rides along — it carries eta_trend, late_reason,
+    // cancellation_reason and the actual delivery/pickup times.
+    return j({ ...res, lifecycle: classifyOrderStatus(res) });
   },
 
   async get_receipt({ order_uuid }) {
@@ -877,7 +951,7 @@ const RAW_TOOLS: Anthropic.Tool[] = [
   {
     name: "get_menu",
     description:
-      "Fetch a restaurant's menu: returns menu_id (needed for cart adds and item details), store_is_open, the store's active promotions and which items qualify, order-ahead/schedule-ahead windows, and items with item_id, name, description, price, category, has_required_modifiers, orderability. Large menus are capped — pass `filter` (case-insensitive substring on name/description/category) to narrow.",
+      "Fetch a restaurant's menu: returns menu_id (needed for cart adds and item details), store_is_open, the store's active promotions and which items qualify, order-ahead/schedule-ahead windows, and items with item_id, name, description, price, category, has_required_modifiers, orderability, and popularity (is_popular, popularity_rank, popular_modifications). Large menus are capped — pass `filter` (case-insensitive substring on name/description/category) to narrow.",
     input_schema: {
       type: "object",
       properties: {
@@ -1070,7 +1144,7 @@ const RAW_TOOLS: Anthropic.Tool[] = [
   {
     name: "submit_order",
     description:
-      "Place the order — charges the user's real payment method. HARD GATE: the terminal asks the user to type 'yes'; a decline returns declined_by_user. Call ONLY after: (1) preview shown, (2) tip explicitly confirmed (delivery; pickup = 0 without asking), (3) payment method named to the user, (4) the user clearly said to place it. NOT idempotent — never retry without checking get_order_status first. Report success only when final_status.status == 'successful'.",
+      "Place the order — charges the user's real payment method. HARD GATE: the terminal asks the user to type 'yes'; a decline returns declined_by_user. Call ONLY after: (1) preview shown, (2) tip explicitly confirmed (delivery; pickup = 0 without asking), (3) payment method named to the user, (4) the user clearly said to place it. NOT idempotent — never retry without checking get_order_status first. Report success only when the response's lifecycle.order_created is true.",
     input_schema: {
       type: "object",
       properties: {
@@ -1105,7 +1179,7 @@ const RAW_TOOLS: Anthropic.Tool[] = [
   {
     name: "get_order_history",
     description:
-      "Past orders (default 50 orders / 90 days, max 100 / 365): store, items, total, order_uuid, is_reorderable, fulfillment_type. Use to analyze habits ('my usual'), find reorder targets, or locate a specific past order (scan all results; if page_full, re-query higher/wider).",
+      "Past orders (default 50 orders / 90 days, max 100 / 365): store, items (item_id, name, quantity), order_date, order_fulfilled_at, order_uuid, is_reorderable, fulfillment_type, is_group_order. Rows carry no total and no per-item price — use get_receipt for money. Use to analyze habits ('my usual'), find reorder targets, or locate a specific past order (scan all results; if page_full, re-query higher/wider).",
     input_schema: {
       type: "object",
       properties: {
@@ -1129,7 +1203,7 @@ const RAW_TOOLS: Anthropic.Tool[] = [
   {
     name: "get_order_status",
     description:
-      "Track a submitted order through its whole lifecycle: successful | pending (check again) | action_required (user must verify in app) | failed | not_found, plus placement and delivery/pickup progress, current ETA, late-delivery trend, actual delivery/pickup time, and the cancellation reason when one applies. Answer 'where is my order?' from this rather than guessing from the submit response.",
+      "Track a submitted order. The order is under `result` (result.status, plus quoted/actual_delivery_time, actual_pickup_time, eta_trend, late_reason, cancellation_reason, merchant_name, is_pickup) — read the derived `lifecycle` block rather than matching status text: order_created, is_terminal, keep_polling, not_found. Statuses: pending (check again) | placed (created successfully) | scheduled/store_confirmed/ready_for_pickup/dasher_assigned/dasher_at_store/picked_up/dasher_nearby (delivery or pickup underway) | completed | cancelled | action_required (user must verify in app) | order_declined. Answer 'where is my order?' from this rather than guessing from the submit response.",
     input_schema: {
       type: "object",
       properties: { order_uuid: str("From submit response or order history") },

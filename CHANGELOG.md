@@ -8,6 +8,53 @@ file's section for that version, every downloadable artifact, and a
 
 ## [Unreleased]
 
+### Fixed
+- **`submit_order` could never confirm an order it had just placed.** The poll
+  read `final_status.status`, but dd-cli nests the order under `result` — there
+  is no top-level `status`, and the pre-0.2.3 value `successful` the note and
+  tool description told the model to look for no longer exists at all. So the
+  loop never saw a non-`pending` value: it burned all 8 attempts (40 seconds) on
+  every submit and then handed the model a contract it could not satisfy. Status
+  now comes from `result.status` through a derived `lifecycle` block
+  (`order_created`, `is_terminal`, `keep_polling`, `not_found`), and the poll
+  exits on the first conclusive check. Cart cleanup no longer depends on a
+  string comparison that always failed through to `submitRes.success`.
+- **Order history rows came back undated.** The mapper read `created_at`, which
+  dd-cli does not return; the real fields are `order_date` and
+  `order_fulfilled_at`. Item `item_id` was dropped too. Rows carry no total and
+  no per-item price on 0.2.5, so the tool description stops promising them and
+  points at `get_receipt` instead.
+- **Peckish told the model "no popularity data exists" while discarding it.**
+  Menu items carry `is_popular`, `popularity_rank` and `popular_modifications`.
+  The tokens now carry them through and the instruction says to use them.
+- **Verified against a real dd-cli 0.2.5, and two menu fields were being
+  dropped.** The 0.2.3–0.2.5 catch-up was written from release notes, which
+  name features but not response fields; `menu --help` on the real binary names
+  them. Two fell through both the explicit trimmer picks and
+  `CARRY_THROUGH_TOKENS`:
+  - `items[].orderability` (the per-item `asap` / `schedule_ahead` list) — no
+    token matched it, so the model never saw it *while `get_menu`'s own
+    description promised it was there*. Added as its own token.
+  - `store_next_open_time` — now picked explicitly next to `store_is_open`,
+    rather than widening the token set with "open"/"time" and dragging
+    unrelated timestamps through every menu.
+
+  Both were then confirmed present in live responses, along with every flag:
+  `verify-dd-cli.mjs` reports 17 passed, 0 failed against a signed-in 0.2.5.
+  `promotions[]` and `applicable_promotion_ids` are matched by the existing
+  tokens, the 0.2.5 pickup fields were already allowlisted by name, and
+  `findGuestToken()` searches by key name rather than path — 0.2.5 confirms the
+  key is exactly `guest_token` on the acted-for subcart.
+- `tests/fixtures/fake-dd-cli.mjs` now mirrors real observed responses: the
+  `order status` envelope nested under `result`, ISO `order_date` /
+  `order_fulfilled_at` on history rows, and item popularity. Its invented flat
+  `{status: "successful"}` is why the broken poll passed tests for so long.
+  `submit_order` had no test coverage at all and now does.
+- The fixture also uses the field names the real CLI documents (`applicable_promotion_ids`, `orderability`, `supports_order_ahead`,
+  `promotions[].code`) instead of invented ones. The invented names happened to
+  match the token set, which is why the suite stayed green while `orderability`
+  was being dropped.
+
 ### Added
 - **Guest sub-carts.** A group cart can now hold items for people with no
   DoorDash account: `add_items_to_cart` takes `guest_first_name` +

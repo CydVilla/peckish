@@ -73,7 +73,7 @@ const INSTRUCTIONS = `Peckish orders food on DoorDash for the signed-in user. Op
 - Enterprise chains (Domino's, Sweetgreen, …) are orderable; still skip is_link_out stores.
 - SIGN-IN: when a tool fails with "sign-in is missing or expired", offer start_signin — after the user approves a confirmation dialog it opens the DoorDash sign-in in their browser and polls until it completes (call again on login_in_progress; it never opens a second window). Then retry what failed. Only point at running \`dd-cli login\` manually if they decline or the dialog is unavailable. On browser_signin_unavailable (headless Linux host, no browser) stop calling it and relay its note instead: mint a token with \`dd-cli export-token\` on a machine with a browser, set DD_CLI_ACCESS_TOKEN in the environment running Peckish, then retry.
 - Start sessions by calling get_session_context (address, saved dietary preferences, local time) and honor saved preferences; save new durable ones with save_preference.
-- No popularity data exists; distances are meters (÷1609 for miles); is_link_out stores can't be ordered here; age-restricted carts need get_checkout_url — submit_order returning error_reason AGENTIC_RESTRICTED_ITEM_NOT_ALLOWED is that case, so hand over the checkout URL rather than retrying.`;
+- Menus DO carry popularity (items[].is_popular, popularity_rank, popular_modifications) — use it for "what's good here?" instead of declining; distances are meters (÷1609 for miles); is_link_out stores can't be ordered here; age-restricted carts need get_checkout_url — submit_order returning error_reason AGENTIC_RESTRICTED_ITEM_NOT_ALLOWED is that case, so hand over the checkout URL rather than retrying.`;
 
 const server = new Server(
   { name: "peckish", version: "0.4.0" },

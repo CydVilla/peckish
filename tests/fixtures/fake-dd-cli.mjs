@@ -111,9 +111,12 @@ const RESPONSES = {
     store_name: "Ramen House",
     menu_id: "menu_1",
     store_is_open: true,
-    // dd-cli >=0.2.4 store promotions
-    promotions: [{ id: "promo_1", text: "20% off orders over $25" }],
-    schedule_ahead_windows: [{ start_ms: 1790000000000, end_ms: 1790003600000 }],
+    // Shapes below match dd-cli 0.2.5's `menu --help`, which names these
+    // fields: promotions[] carries title/description/code, items reference
+    // them by code through applicable_promotion_ids.
+    store_next_open_time: 1790000000000,
+    promotions: [{ title: "20% off $25+", description: "Spend $25, save 20%", code: "SAVE20" }],
+    supports_order_ahead: true,
     internal_experiment_bucket: "b7",
     items: [
       {
@@ -124,7 +127,11 @@ const RESPONSES = {
         category_name: "Ramen",
         has_required_modifiers: true,
         is_orderable: true,
-        qualifying_promotion_id: "promo_1",
+        applicable_promotion_ids: ["SAVE20"],
+        orderability: ["asap", "schedule_ahead"],
+        is_popular: true,
+        popularity_rank: 2,
+        popular_modifications: ["extra chashu"],
         telemetry_blob: "x".repeat(400),
       },
       {
@@ -144,7 +151,8 @@ const RESPONSES = {
   "restaurant-item-details": () => ({
     item_id: "100",
     name: "Tonkotsu Ramen",
-    promotion: { id: "promo_1", text: "20% off orders over $25" },
+    applicable_promotion_ids: ["SAVE20"],
+    orderability: ["asap"],
     extras: [],
   }),
 
@@ -176,11 +184,13 @@ const RESPONSES = {
         order_uuid: "order_1",
         store_id: "store_1",
         store_name: "Ramen House",
-        created_at: 1780000000000,
-        items: [{ name: "Tonkotsu Ramen", quantity: 1, price: 1695 }],
-        total: 2210,
+        // Real 0.2.5 rows are dated with order_date / order_fulfilled_at (ISO
+        // strings) and carry NO total and no per-item price.
+        order_date: "2026-08-26T23:39:31.029Z",
+        order_fulfilled_at: "2026-08-26T23:57:15.541Z",
+        items: [{ item_id: "37275430436", name: "Tonkotsu Ramen", quantity: 1 }],
         is_reorderable: true,
-        fulfillment_type: "DELIVERY",
+        fulfillment_type: "FULFILLMENT_TYPE_DX_DELIVERY",
         // dd-cli >=0.2.3 group-order participation
         is_group_order: true,
         group_order_role: "HOST",
@@ -189,12 +199,27 @@ const RESPONSES = {
     page_full: false,
   }),
 
+  // Real 0.2.5 shape: everything about the order sits under `result`; there is
+  // no top-level `status`, and `successful` is not a value it can return.
   "order status": () => ({
-    status: "successful",
-    eta_minutes: 12,
-    is_running_late: false,
-    actual_delivery_time_ms: 1780000600000,
+    result: {
+      status: "completed",
+      status_message: null,
+      status_updated_at: "2026-08-26T23:57:15.541Z",
+      action_required: false,
+      merchant_name: "Ramen House",
+      is_pickup: false,
+      quoted_delivery_time: "2026-08-27T00:12:32Z",
+      actual_delivery_time: "2026-08-26T23:57:15.541Z",
+      eta_trend: null,
+      late_reason: null,
+      cancellation_reason: null,
+    },
+    success: true,
+    message: "Order Complete",
   }),
+
+  "order submit": () => ({ order_uuid: "order_1", success: true }),
 
   "find-nearby-stores": () => ({ stores: [] }),
 };
