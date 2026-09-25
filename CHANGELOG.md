@@ -6,7 +6,7 @@ versions follow semver (0.x: minor = features, patch = fixes). Each release on
 file's section for that version, every downloadable artifact, and a
 `SHA256SUMS.txt` to verify them.
 
-## [Unreleased]
+## [0.5.0] - 2026-09-25
 
 ### Fixed
 - **`submit_order` could never confirm an order it had just placed.** The poll

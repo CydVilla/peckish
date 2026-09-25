@@ -1,6 +1,6 @@
 {
   "name": "peckish-desktop",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Peckish for Mac \u2014 double-clickable shell around the Peckish web app (AI DoorDash ordering agent).",
   "private": true,
   "main": "main.js",
