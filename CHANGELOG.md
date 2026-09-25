@@ -8,6 +8,27 @@ file's section for that version, every downloadable artifact, and a
 
 ## [0.5.0] - 2026-09-25
 
+### Security
+- **Three ways the guest sub-cart token could reach the model, now closed.**
+  `guest_token` is a bearer credential dd-cli issues once and cannot reissue,
+  and stripping it by key name turned out not to be enough. Adversarial tests
+  that make the fake CLI return it in shapes Peckish was not written for found
+  that it escaped when: the key was spelled `guestToken` (the stripped-key set
+  matched the exact string `guest_token`); the value was echoed inside a
+  free-text field, where key-based stripping cannot reach it; or the add failed,
+  because `DdCliError.detail` is raw stdout+stderr and reached the model from
+  three separate call sites without ever passing through the stripper.
+  - Stripped-key matching and `findGuestToken` now compare with case and
+    separators removed, so an unexpected spelling is both contained and still
+    captured — continuity no longer depends on dd-cli's choice of casing.
+  - A new `redactGuestTokens()` removes token assignments from free text and
+    redacts known values, applied to the guest-add result and — at the single
+    place every call site shares — to `DdCliError.detail`.
+  - `tests/guest-token.test.ts` covers all of it: eleven cases driving six
+    adversarial response shapes, each asserting the credential appears neither
+    in what the handler returns nor in the audit log written from it. Losing
+    continuity is an acceptable failure; leaking the credential is not.
+
 ### Fixed
 - **`submit_order` could never confirm an order it had just placed.** The poll
   read `final_status.status`, but dd-cli nests the order under `result` — there

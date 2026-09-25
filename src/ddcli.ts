@@ -39,19 +39,47 @@ const MAX_BUFFER = 32 * 1024 * 1024; // menus can be large
  * The one path that legitimately needs it reads the raw payload (ddJsonRaw)
  * and hands it straight to the guest store.
  */
-const STRIPPED_KEYS = new Set(["widget_type", "assistant_instructions", "guest_token"]);
+/**
+ * Compared with separators and case removed, so `guestToken`, `guest-token`
+ * and `GUEST_TOKEN` are all caught. An exact-string match let a camelCase
+ * spelling of the credential through untouched.
+ */
+const normalizeKey = (k: string): string => k.toLowerCase().replace(/[^a-z0-9]/g, "");
+
+const STRIPPED_KEYS = new Set(["widgettype", "assistantinstructions", "guesttoken"]);
 
 export function stripUiFields(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(stripUiFields);
   if (value && typeof value === "object") {
     const out: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(value)) {
-      if (STRIPPED_KEYS.has(k)) continue;
+      if (STRIPPED_KEYS.has(normalizeKey(k))) continue;
       out[k] = stripUiFields(v);
     }
     return out;
   }
   return value;
+}
+
+/**
+ * A guest token assignment written into free text — `"guest_token":"…"` in a
+ * JSON blob, or `guest_token=…` in a log line. Key-based stripping cannot help
+ * here: the credential is inside a string value, not under a key of its own.
+ */
+const GUEST_TOKEN_IN_TEXT = /("?guest[_-]?token"?\s*[:=]\s*"?)([^"\s,}]+)/gi;
+
+/**
+ * Remove guest tokens from a string. Redacts the assignment form above, plus
+ * any exact values the caller already knows (the one just issued, and anything
+ * on file for the cart) — a token echoed bare in a sentence is only removable
+ * if we have seen it.
+ */
+export function redactGuestTokens(text: string, known: Iterable<string> = []): string {
+  let out = text.replace(GUEST_TOKEN_IN_TEXT, (_m, lead: string) => `${lead}[redacted]`);
+  for (const token of known) {
+    if (token && token.length >= 8) out = out.split(token).join("[redacted]");
+  }
+  return out;
 }
 
 export class DdCliError extends Error {
@@ -72,7 +100,10 @@ function execDd(args: string[]): Promise<{ stdout: string; stderr: string }> {
       { timeout: TIMEOUT_MS, maxBuffer: MAX_BUFFER },
       (err, stdout, stderr) => {
         if (err) {
-          const detail = `${stdout}\n${stderr}`.trim();
+          // dd-cli can echo a guest token in a failure message, and `detail`
+          // reaches the model and the audit log from several call sites — so
+          // it is scrubbed here, at the one place all of them share.
+          const detail = redactGuestTokens(`${stdout}\n${stderr}`.trim());
           if (
             /missing credentials|sign in with dd-cli login|token has expired|failed to authenticate|try running dd-cli login|DD_CLI_ACCESS_TOKEN|invalid access token/i.test(
               detail,
@@ -191,7 +222,9 @@ export async function ddJsonRaw(
 export function findGuestToken(value: unknown, depth = 0): string | null {
   if (depth > 8 || !value || typeof value !== "object") return null;
   for (const [k, v] of Object.entries(value)) {
-    if (k === "guest_token" && typeof v === "string" && v) return v;
+    // Same normalization as the stripper, so a camelCase token is captured
+    // rather than merely discarded — otherwise continuity is lost for nothing.
+    if (normalizeKey(k) === "guesttoken" && typeof v === "string" && v) return v;
     const nested = findGuestToken(v, depth + 1);
     if (nested) return nested;
   }

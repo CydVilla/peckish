@@ -16,6 +16,7 @@ import {
   ddCliVersion,
   ddJsonRaw,
   findGuestToken,
+  redactGuestTokens,
   stripUiFields,
   DdCliError,
 } from "./ddcli.js";
@@ -465,15 +466,18 @@ export const toolHandlers: Record<string, Handler> = {
     // Either half missing — no token in the response, or nothing to key it on
     // — means the next add for this name opens a SECOND sub-cart, so say so
     // rather than reporting a clean success.
+    // Read once, whether or not this guest is new: a token that came back on
+    // THIS response has to be scrubbed from the text below even when we already
+    // had one on file, because dd-cli may echo it in a message field.
+    const issued = findGuestToken(raw);
     let lostContinuity = false;
     if (!known) {
-      const token = findGuestToken(raw);
       const forCart = String(cart_uuid ?? raw.cart_uuid ?? "");
-      if (token && forCart) rememberGuest(forCart, guest_first_name, guest_last_name, token);
+      if (issued && forCart) rememberGuest(forCart, guest_first_name, guest_last_name, issued);
       else lostContinuity = true;
     }
 
-    return j({
+    const payload = j({
       ...(stripUiFields(raw) as Record<string, unknown>),
       guest: `${guest_first_name} ${guest_last_name}`,
       guest_add: known ? "existing guest" : "new guest",
@@ -485,6 +489,10 @@ export const toolHandlers: Record<string, Handler> = {
         : {}),
       note: "Adds are additive, not idempotent: on a timeout or error, check item_errors[] before retrying — an item missing from it already went in, and retrying doubles it.",
     });
+    // Belt to the stripper's braces: stripUiFields drops a `guest_token` KEY,
+    // but a credential pasted into a free-text field is just a substring and
+    // survives it. Redact by value before anything sees this.
+    return redactGuestTokens(payload, [issued ?? "", known ?? ""]);
   },
 
   async list_cart_guests({ cart_uuid }) {

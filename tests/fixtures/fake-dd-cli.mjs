@@ -53,6 +53,9 @@ const reply = (structuredContent) => {
   process.exit(0);
 };
 
+/** The one value every containment test hunts for. */
+const GUEST_TOKEN = "gtok_secret_abc123";
+
 const RESPONSES = {
   "address list": () => ({
     addresses: [
@@ -163,15 +166,56 @@ const RESPONSES = {
     const guest = flag("--guest-json");
     if (!guest) return base;
     const parsed = JSON.parse(guest);
+    if (!parsed.first_name) return { ...base, guest_cart: { acted_for: "existing guest" } };
+
     // dd-cli returns the one-time guest_token only on a new guest's first add,
-    // nested on the sub-cart it just created.
-    if (parsed.first_name) {
-      return {
-        ...base,
-        guest_cart: { name: `${parsed.first_name} ${parsed.last_name}`, guest_token: "gtok_secret_abc123" },
-      };
+    // nested on the sub-cart it just created. FAKE_DD_CLI_GUEST_SCENARIO makes
+    // it return that credential in shapes Peckish does not expect, so the
+    // containment guarantee can be attacked rather than assumed.
+    const name = `${parsed.first_name} ${parsed.last_name}`;
+    switch (process.env.FAKE_DD_CLI_GUEST_SCENARIO) {
+      case "camel":
+        // A camelCase spelling: neither the finder nor the stripper matches it.
+        return { ...base, guest_cart: { name, guestToken: GUEST_TOKEN } };
+      case "in_message":
+        // Correctly keyed, but also echoed inside a free-text field.
+        return {
+          ...base,
+          message: `Created sub-cart for ${name} (token ${GUEST_TOKEN})`,
+          guest_cart: { name, guest_token: GUEST_TOKEN },
+        };
+      case "deep": {
+        // Nested past findGuestToken's depth cap.
+        let node = { guest_token: GUEST_TOKEN };
+        for (let i = 0; i < 10; i++) node = { wrap: node };
+        return { ...base, guest_cart: { name, ...node } };
+      }
+      case "deep_camel": {
+        // Both evasions at once: a camelCase spelling nested past the finder's
+        // depth cap. Nothing can learn the value, so redaction has nothing to
+        // work with — the stripper's key normalization is the only defence.
+        let node = { guestToken: GUEST_TOKEN };
+        for (let i = 0; i < 10; i++) node = { wrap: node };
+        return { ...base, guest_cart: { name, ...node } };
+      }
+      case "array":
+        return { ...base, guest_carts: [{ name, guest_token: GUEST_TOKEN }] };
+      case "error_echo":
+        // Non-zero exit with the credential in stdout — this is what lands in
+        // DdCliError.detail, which never passed through the stripper.
+        process.stdout.write(
+          JSON.stringify({
+            content: [],
+            structuredContent: { guest_cart: { name, guest_token: GUEST_TOKEN } },
+            isError: true,
+          }),
+        );
+        process.stderr.write(`partial failure for ${name}; guest_token=${GUEST_TOKEN}\n`);
+        process.exit(1);
+        break;
+      default:
+        return { ...base, guest_cart: { name, guest_token: GUEST_TOKEN } };
     }
-    return { ...base, guest_cart: { acted_for: "existing guest" } };
   },
 
   "cart list": () => ({ carts: [] }),
