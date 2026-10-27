@@ -79,7 +79,7 @@ ending 1234. Suggested Dasher tip is $3.50 — that, another amount, or none?
 - **Node.js 20+** — `node --version` to check; install from nodejs.org or brew.
 - **DoorDash CLI access** (currently waitlist-gated by DoorDash). Peckish
   requires **dd-cli ≥ 0.2.1** — on Linux, **≥ 0.2.2**, the first release
-  with Linux builds — and targets **≥ 0.2.5**, the current release. Older
+  with Linux builds — and targets **≥ 0.2.6**, the current release. Older
   binaries still order fine; Peckish reads `dd-cli --version` at startup and
   turns off only what that build can't do (see
   [dd-cli versions](#dd-cli-versions)). Download the release from
@@ -425,6 +425,7 @@ degrades instead of breaking:
 | ≥ 0.2.3 | `find_address` / `add_address`, full order-status lifecycle, group orders in history |
 | ≥ 0.2.4 | Promotions on menus and item details, searching from a saved `address_id` |
 | ≥ 0.2.5 | Search filters, per-store pickup availability, schedule-ahead windows, weight-priced items |
+| ≥ 0.2.6 | Paying on a chosen card, DoubleDash, cross-retailer price comparison, Meal Manager calendars, saving an address without making it default |
 
 Two scripts keep this honest:
 
@@ -462,7 +463,7 @@ terminal REPL          local web app           MCP client (Claude Desktop…)
      · prompt caching · web_search · cost meter      │
                    └───────────────┬─────────────────┘
                                    ↓
-                 28 typed tools — src/tools.ts (strict: true)
+                 38 typed tools — src/tools.ts (strict: true)
                                    ↓
                  sanitizing wrapper — src/ddcli.ts
                                    ↓
@@ -518,7 +519,7 @@ Independent of intent, DoorDash necessarily sees the API traffic itself
 |---|---|
 | `src/index.ts` | Terminal REPL surface (abort, cost lines, /cost) |
 | `src/web.ts` + `public/index.html` | Web surface: SSE streaming, cards, Stop, confirm modal, Origin guard |
-| `src/mcp.ts` | MCP stdio server: 28 tools + session context, instructions, elicitation gates |
+| `src/mcp.ts` | MCP stdio server: 38 tools + session context, instructions, elicitation gates |
 | `src/agent.ts` | System prompt + streaming tool loop (beta: context editing; web_search; usage) |
 | `src/tools.ts` | Tool schemas (strictified) + handlers; menu trimming/filtering |
 | `src/ddcli.ts` | `execFile` wrapper: envelope parsing, UI-field stripping, error mapping, bounded read-only retry |
@@ -526,7 +527,7 @@ Independent of intent, DoorDash necessarily sees the API traffic itself
 | `src/confirm.ts` | Pluggable confirmation gates (fail closed) |
 | `src/costs.ts` / `src/logger.ts` | Cost accounting · JSONL audit log |
 | `src/prefs.ts` | Preference persistence (`~/.peckish/`) |
-| `tests/unit.test.ts` | 25 unit tests (`npm test`), no network needed |
+| `tests/unit.test.ts` | 108 unit tests (`npm test`), no network needed |
 | `desktop/` | Electron shell for the Mac app (.dmg): onboarding + server launcher, no agent logic |
 | `packages/mcp/` | The `peckish-mcp` npm package — a launcher so `npx -y peckish-mcp` starts the MCP server |
 | `extension/` | Claude Desktop extension (`.mcpb`): manifest + vendored server. `node build-manifest.mjs && mcpb pack . peckish.mcpb` |

@@ -78,7 +78,7 @@ client, not by the model:
 
 ## What it can do
 
-28 tools covering search → menus → carts → preview → confirm → submit, plus
+38 tools covering search → menus → carts → preview → confirm → submit, plus
 comparison shopping across up to 3 finalists with true totals, promo scanning,
 pickup-vs-delivery comparison, order history and honest spend breakdowns,
 reorders with silent-drop detection, saved dietary preferences, work benefits

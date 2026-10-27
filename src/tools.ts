@@ -191,6 +191,15 @@ const MENU_ITEM_CAP = 160;
 
 const ADDRESS_ID_VERSION = "0.2.4";
 
+/**
+ * 0.2.6 added per-order card selection (`--card-id` on preview/submit,
+ * `payment-method set`), DoubleDash, `find-item-across-retailers`,
+ * `meal-manager get-calendars` and `address add --no-set-default`. Gated
+ * rather than attempted, so an older binary never sees a flag it would
+ * reject mid-order.
+ */
+const CARD_SELECT_VERSION = "0.2.6";
+
 /** Location flags for a store-search command, plus a note on what was used. */
 async function locationArgs(opts: {
   address_id?: string;
@@ -212,6 +221,100 @@ async function locationArgs(opts: {
     args: ["--lat", String(def.lat), "--lng", String(def.lng)],
     searched_near: "default saved address (coordinates — dd-cli too old for promo-aware search)",
   };
+}
+
+/**
+ * One saved card, read from either shape `payment-method list` has returned.
+ *
+ * 0.2.6 renamed the whole response: `cards[]` became `payment_methods[]`,
+ * `payment_method_id` became `card_id`, `brand`/`last4` collapsed into a
+ * ready-made `display_name`, and the top-level `default_payment_method_id`
+ * pointer became a per-card `is_default`. Reading only the old names against
+ * a 0.2.6 binary yields an empty list and a null default card — which reads
+ * to the model as "no card on file", the exact conclusion the command's own
+ * help warns never to draw. Peckish still supports dd-cli back to 0.2.1, so
+ * both spellings are accepted rather than switched on the version.
+ */
+export interface SavedCard {
+  card_id?: string;
+  display_name?: string;
+  is_default: boolean;
+  is_expired?: boolean;
+}
+
+export function readSavedCards(res: Record<string, unknown>): {
+  cards: SavedCard[];
+  unlisted_count?: number;
+} {
+  const rows = ((res.payment_methods as any[]) ?? (res.cards as any[]) ?? []) as any[];
+  const legacyDefault = res.default_payment_method_id;
+  const cards = rows.map((c) => {
+    const card_id = c.card_id ?? c.payment_method_id;
+    // 0.2.5 had no display_name; build the same "Visa ending in 4242" phrasing
+    // from brand + last4 so callers have one field to name a card with.
+    const display_name =
+      c.display_name ??
+      (c.brand || c.last4
+        ? [c.brand, c.last4 ? `ending in ${c.last4}` : null].filter(Boolean).join(" ")
+        : undefined);
+    return {
+      card_id,
+      display_name,
+      // Only fall back to the 0.2.5 pointer when the card carries no
+      // is_default of its own — on 0.2.6 that pointer is absent, and
+      // `undefined === undefined` would mark every card default.
+      is_default:
+        typeof c.is_default === "boolean"
+          ? c.is_default
+          : legacyDefault != null && card_id != null && card_id === legacyDefault,
+      ...(typeof c.is_expired === "boolean" ? { is_expired: c.is_expired } : {}),
+    };
+  });
+  const unlisted = res.unlisted_count;
+  return {
+    cards,
+    ...(typeof unlisted === "number" ? { unlisted_count: unlisted } : {}),
+  };
+}
+
+/**
+ * Run an account-gated 0.2.6 lookup, treating "not enabled for this account"
+ * as an answer rather than a failure.
+ *
+ * DoubleDash and Meal Manager are enabled per account, and dd-cli says so
+ * with exit 4 / `error.code: "gated"`. Verified live: a consumer account with
+ * no Meal Manager team gets `gated`, not the empty `calendars` list the
+ * command's help describes. Letting that throw would surface a scary CLI
+ * error for the ordinary case of "your company doesn't use this", so the
+ * gate is converted to the same shape the unsupported-version path returns.
+ */
+async function gatedLookup<T extends Record<string, unknown>>(
+  run: () => Promise<Record<string, unknown>>,
+  onGated: T,
+): Promise<Record<string, unknown> | T> {
+  try {
+    return await run();
+  } catch (err) {
+    if (err instanceof DdCliError && err.code === "gated") return onGated;
+    throw err;
+  }
+}
+
+/**
+ * Coordinates for the commands that take no --address-id at all
+ * (`find-item-across-retailers`). Falls back to the default saved address,
+ * which carries lat/lng of its own.
+ */
+async function resolveCoords(opts: {
+  lat?: number;
+  lng?: number;
+}): Promise<{ lat: number; lng: number; searched_near: string } | null> {
+  if (opts.lat != null && opts.lng != null) {
+    return { lat: opts.lat, lng: opts.lng, searched_near: "provided coords" };
+  }
+  const def = await getDefaultAddress();
+  if (!def || def.lat == null || def.lng == null) return null;
+  return { lat: def.lat, lng: def.lng, searched_near: "default saved address" };
 }
 
 /** --address-id for the commands that accept nothing else (menu, item details). */
@@ -262,16 +365,34 @@ export const toolHandlers: Record<string, Handler> = {
     return j(res);
   },
 
-  async add_address({ place_id, printable_address }) {
+  async add_address({ place_id, printable_address, set_default }) {
     // `address add` saves the address AND makes it the default delivery
     // address — the same account-wide change set_default_address gates.
+    // 0.2.6 added --no-set-default, so a one-off address (a friend's place,
+    // a hotel) no longer has to displace the user's home address; without it
+    // the old behaviour is all dd-cli can do, and the prompt still says so.
+    const keepDefault = set_default === false && (await ddCliAtLeast(CARD_SELECT_VERSION));
     const ok = await confirmAction(
-      `The agent wants to SAVE a new delivery address and make it your ACCOUNT-WIDE default:\n  ${printable_address ?? place_id}\n(This persists across the DoorDash app/web until changed again.)`,
+      keepDefault
+        ? `The agent wants to SAVE a new delivery address (your current default is unchanged):\n  ${printable_address ?? place_id}`
+        : `The agent wants to SAVE a new delivery address and make it your ACCOUNT-WIDE default:\n  ${printable_address ?? place_id}\n(This persists across the DoorDash app/web until changed again.)`,
     );
     if (!ok) return j({ success: false, declined_by_user: true });
-    const res = await ddJson(["address", "add", "--place-id", String(place_id)]);
-    invalidateDefaultAddress();
-    return j(res);
+    const args = ["address", "add", "--place-id", String(place_id), "--yes"];
+    if (printable_address) args.push("--description", String(printable_address));
+    if (keepDefault) args.push("--no-set-default");
+    const res = await ddJson(args);
+    // Only the default moved if we let it; otherwise the cached default still
+    // stands and re-reading it is a wasted call.
+    if (!keepDefault) invalidateDefaultAddress();
+    return j({
+      ...res,
+      ...(set_default === false && !keepDefault
+        ? {
+            note: `Keeping the existing default needs dd-cli >= ${CARD_SELECT_VERSION}; this address was saved AND made the default. ${upgradeHint(await ddCliVersion())}`,
+          }
+        : {}),
+    });
   },
 
   async search_restaurants({
@@ -528,13 +649,19 @@ export const toolHandlers: Record<string, Handler> = {
     return j(res);
   },
 
-  async preview_order({ cart_uuid, scheduled_time, include_work_benefits, selected_budget_id, fulfillment, priority, no_apply_credits }) {
+  async preview_order({ cart_uuid, scheduled_time, include_work_benefits, selected_budget_id, fulfillment, priority, no_apply_credits, card_id }) {
     const base = ["order", "preview", "--cart-uuid", String(cart_uuid)];
     if (scheduled_time) base.push("--scheduled-time", String(scheduled_time));
     if (include_work_benefits) base.push("--include-work-benefits");
     if (selected_budget_id) base.push("--selected-budget-id", String(selected_budget_id));
     if (priority) base.push("--priority");
     if (no_apply_credits) base.push("--no-apply-credits");
+    // ASAP only — dd-cli rejects --card-id alongside --scheduled-time, so a
+    // scheduled order silently keeps the account default and is named as such.
+    const cardIdUsable = Boolean(
+      card_id && !scheduled_time && (await ddCliAtLeast(CARD_SELECT_VERSION)),
+    );
+    if (cardIdUsable) base.push("--card-id", String(card_id));
 
     // Canonical human-facing summary first (per dd-cli guidance), then the
     // structured quote for programmatic fields, then the default card.
@@ -592,11 +719,21 @@ export const toolHandlers: Record<string, Handler> = {
     let default_card: unknown = null;
     let payment_note: string | undefined;
     try {
+      // An ASAP preview with --card-id already names the card it priced, and
+      // that is the card submit will charge — prefer it over the account
+      // default, which may be a different card entirely.
+      const priced = (raw.quote as any)?.payment_method ?? (raw as any).payment_method;
       const pm = await ddJson(["payment-method", "list"], { retryOnce: true });
-      const cards = (pm.cards as any[]) ?? [];
-      const def = cards.find((c) => c.payment_method_id === pm.default_payment_method_id);
+      const { cards } = readSavedCards(pm);
+      const def = priced?.card_id
+        ? (cards.find((c) => c.card_id === priced.card_id) ?? {
+            card_id: priced.card_id,
+            display_name: priced.display_name,
+            is_default: false,
+          })
+        : cards.find((c) => c.is_default);
       default_card = def
-        ? { brand: def.brand, last4: def.last4 }
+        ? { card_id: def.card_id, display_name: def.display_name, is_default: def.is_default }
         : null;
       if (!def)
         payment_note =
@@ -605,11 +742,26 @@ export const toolHandlers: Record<string, Handler> = {
       payment_note = "payment-method list failed — offer checkout-url so the user can verify their payment method.";
     }
 
+    if (card_id && !cardIdUsable) {
+      const dropped = scheduled_time
+        ? "A specific card was requested, but dd-cli allows --card-id on ASAP orders only — this scheduled order was priced on the account default. Name the is_default card from list_payment_methods and submit without card_id."
+        : `A specific card was requested, but that needs dd-cli >= ${CARD_SELECT_VERSION}; this quote used the account default. ${upgradeHint(await ddCliVersion())}`;
+      // Appended, not assigned: a failed payment-method list above is its own
+      // problem and must not be swallowed by this one.
+      payment_note = payment_note ? `${payment_note} ${dropped}` : dropped;
+    }
+
     return j({
       display_summary: summary,
       quote: trimmedQuote,
       default_card,
       ...(payment_note ? { payment_note } : {}),
+      ...(cardIdUsable
+        ? {
+            card_note:
+              "Priced on the requested card. Pass the SAME card_id to submit_order, or submit charges whatever the account default is at submit time.",
+          }
+        : {}),
       success: raw.success,
       message: raw.message,
     });
@@ -628,6 +780,7 @@ export const toolHandlers: Record<string, Handler> = {
     team_account_id,
     expense_code,
     expense_notes,
+    card_id,
   }) {
     // ── HARD HUMAN GATE ────────────────────────────────────────────────────
     const approved = await confirmOrderPlacement(
@@ -651,6 +804,11 @@ export const toolHandlers: Record<string, Handler> = {
     if (team_account_id) args.push("--team-account-id", String(team_account_id));
     if (expense_code) args.push("--expense-code", String(expense_code));
     if (expense_notes) args.push("--expense-notes", String(expense_notes));
+    // Same ASAP-only rule as preview. Dropping it here rather than letting
+    // dd-cli reject the call keeps a submit from failing after the user has
+    // already approved it at the terminal gate.
+    if (card_id && !scheduled_time && (await ddCliAtLeast(CARD_SELECT_VERSION)))
+      args.push("--card-id", String(card_id));
 
     let submitRes: Record<string, unknown>;
     try {
@@ -743,7 +901,28 @@ export const toolHandlers: Record<string, Handler> = {
     const res = await ddJson(["order", "status", "--order-uuid", String(order_uuid)], { retryOnce: true });
     // Raw `result` rides along — it carries eta_trend, late_reason,
     // cancellation_reason and the actual delivery/pickup times.
-    return j({ ...res, lifecycle: classifyOrderStatus(res) });
+    //
+    // dd-cli >=0.2.6: `result.doubledash` on an in-flight delivery is the
+    // signal to offer DoubleDash. A response can carry an offer whose
+    // deadline has already passed, so the expiry is resolved here rather
+    // than leaving the model to compare timestamps.
+    const dd = (res.result as any)?.doubledash;
+    const expiresAt = dd?.expires_at ? Date.parse(String(dd.expires_at)) : NaN;
+    const live = dd && (Number.isNaN(expiresAt) || expiresAt > Date.now());
+    return j({
+      ...res,
+      lifecycle: classifyOrderStatus(res),
+      doubledash_offer: live
+        ? {
+            expires_at: dd.expires_at,
+            stores: dd.stores,
+            note: "Offer DoubleDash now and tell the user the deadline: items from these stores join this same delivery with no extra delivery fee. Use list_doubledash_options to see what's available.",
+          }
+        : undefined,
+      ...(dd && !live
+        ? { doubledash_note: "A DoubleDash offer was attached but has expired — say nothing about it." }
+        : {}),
+    });
   },
 
   async get_receipt({ order_uuid }) {
@@ -752,15 +931,227 @@ export const toolHandlers: Record<string, Handler> = {
 
   async list_payment_methods() {
     const res = await ddJson(["payment-method", "list"], { retryOnce: true });
-    const cards = ((res.cards as any[]) ?? []).map((c) => ({
-      payment_method_id: c.payment_method_id,
-      brand: c.brand,
-      last4: c.last4,
-      is_default: c.payment_method_id === res.default_payment_method_id,
-    }));
+    const { cards, unlisted_count } = readSavedCards(res);
     return j({
       cards,
-      note: "cards[] shows credit/debit cards only — wallets (Apple Pay etc.) and gift cards are not visible here. Never conclude 'no payment method on file' from an empty list.",
+      ...(unlisted_count != null ? { unlisted_count } : {}),
+      note:
+        "cards[] shows credit/debit cards only — wallets (Apple Pay etc.) and gift cards are not visible here, and unlisted_count counts saved cards that cannot be shown. Never conclude 'no payment method on file' from an empty list. Name a card to the user by display_name and never read card_id aloud; match 'my Amex' or 'the one ending 4242' against display_name, and if nothing matches or several do, list them and ask. Never pick a card with is_expired true.",
+    });
+  },
+
+  async set_default_payment_method({ card_id, display_name }) {
+    if (!(await ddCliAtLeast(CARD_SELECT_VERSION))) {
+      return j({
+        success: false,
+        unsupported: true,
+        note: `Changing the default card needs dd-cli >= ${CARD_SELECT_VERSION}. ${upgradeHint(await ddCliVersion())} To pay for a single order on another card, no upgrade is needed if the user changes it in the DoorDash app.`,
+      });
+    }
+    const ok = await confirmAction(
+      `The agent wants to change your ACCOUNT-WIDE default payment card to:\n  ${display_name ?? card_id}\n(This persists across the DoorDash app/web and every future order until changed again.)`,
+    );
+    if (!ok) return j({ success: false, declined_by_user: true });
+    const res = await ddJson(["payment-method", "set", "--card-id", String(card_id), "--yes"]);
+    return j({
+      ...res,
+      note: "The account default changed. Any cart already previewed must be previewed again before submitting, so the quote reflects the new card.",
+    });
+  },
+
+  async find_item_across_retailers({ query, lat, lng, max, radius }) {
+    if (!(await ddCliAtLeast(CARD_SELECT_VERSION))) {
+      return j({
+        results: [],
+        unsupported: true,
+        note: `Cross-retailer price comparison needs dd-cli >= ${CARD_SELECT_VERSION}. ${upgradeHint(await ddCliVersion())} Until then, compare by calling find_items at each store separately.`,
+      });
+    }
+    // This command takes coordinates only — no --address-id — so a saved
+    // address has to be resolved to lat/lng before the call.
+    const coords = await resolveCoords({ lat, lng });
+    if (!coords) {
+      return j({
+        results: [],
+        note: "No coordinates available: the user has no default saved address and none were given. Ask where to search, or use find_address + add_address first.",
+      });
+    }
+    const args = [
+      "find-item-across-retailers",
+      "-q",
+      String(query),
+      "--lat",
+      String(coords.lat),
+      "--lng",
+      String(coords.lng),
+    ];
+    if (max != null) args.push("--max", String(max));
+    if (radius != null) args.push("--radius", String(radius));
+    const res = await ddJson(args, { retryOnce: true });
+    const results = ((res.results as any[]) ?? []).map((r) => ({
+      item_id: r.item_id,
+      item_name: r.item_name,
+      store_id: r.store_id,
+      store_name: r.store_name,
+      menu_id: r.menu_id,
+      price: r.price,
+      purchase_type: r.purchase_type,
+      measurement_unit: r.measurement_unit,
+      category_name: r.category_name,
+      unavailable_reason: r.unavailable_reason,
+    }));
+    return j({
+      results,
+      searched_near: coords.searched_near,
+      success: res.success,
+      message: res.message,
+      note: "Only compare price across rows sharing the same purchase_type AND measurement_unit — a per-lb price and a per-each price are not comparable. A row with unavailable_reason set has no confirmed price: don't quote it or call it in stock. Empty results means no nearby store carries a match — widen radius (default 5 miles) before concluding none exists.",
+    });
+  },
+
+  async get_meal_manager_calendars({ date }) {
+    if (!(await ddCliAtLeast(CARD_SELECT_VERSION))) {
+      return j({
+        calendars: [],
+        unsupported: true,
+        note: `Meal Manager calendars need dd-cli >= ${CARD_SELECT_VERSION}. ${upgradeHint(await ddCliVersion())}`,
+      });
+    }
+    const args = ["meal-manager", "get-calendars"];
+    if (date) args.push("--date", String(date));
+    // Verified live on 0.2.6: an account with no Meal Manager team is
+    // `gated`, not an empty list as the command's help suggests.
+    const res = await gatedLookup(() => ddJson(args, { retryOnce: true }), {
+      calendars: [],
+      not_enabled: true,
+    });
+    if ((res as any).not_enabled) {
+      return j({
+        calendars: [],
+        not_enabled: true,
+        note: "This DoorDash account is not enrolled in Meal Manager (DoorDash for Work). That is a normal answer, not an error — tell the user their account has no corporate meal calendars and do not retry.",
+      });
+    }
+    const calendars = (res.calendars as any[]) ?? [];
+    return j({
+      calendars,
+      note: calendars.length
+        ? "Join a dated group cart with add_items_to_cart using that cart's cart_id as cart_uuid plus group_cart — the user joins as a participant. checkout_time is when the cart locks; spots_left is remaining capacity."
+        : "An empty calendars list is the normal result for anyone not on a Meal Manager team — it is NOT an error and NOT a sign something went wrong. Say the user has no corporate meal calendars rather than reporting a failure.",
+    });
+  },
+
+  async list_doubledash_options({ order_uuid, cart_uuid, max_stores }) {
+    if (!(await ddCliAtLeast(CARD_SELECT_VERSION))) {
+      return j({
+        stores: [],
+        unsupported: true,
+        note: `DoubleDash needs dd-cli >= ${CARD_SELECT_VERSION}. ${upgradeHint(await ddCliVersion())}`,
+      });
+    }
+    const args = ["doubledash", "options"];
+    if (order_uuid) args.push("--order-uuid", String(order_uuid));
+    else if (cart_uuid) args.push("--cart-uuid", String(cart_uuid));
+    if (max_stores != null) args.push("--max-stores", String(max_stores));
+    // DoubleDash is enabled per account; `gated` means this one doesn't have
+    // it, which the model must treat as "say nothing", not as a failure.
+    const res = await gatedLookup(() => ddJson(args, { retryOnce: true }), {
+      stores: [],
+      not_enabled: true,
+    });
+    if ((res as any).not_enabled) {
+      return j({
+        stores: [],
+        not_enabled: true,
+        note: "DoubleDash is not available on this account. Say nothing about it to the user and do not retry.",
+      });
+    }
+    const ok = res as Record<string, unknown>;
+    const stores = (ok.stores as any[]) ?? [];
+    return j({
+      stores,
+      success: ok.success,
+      message: ok.message,
+      note: stores.length
+        ? "Items from these stores join the SAME delivery with no extra delivery fee. Adding one creates a cart — preview_order and submit_order it with the user's go-ahead, exactly like any other order."
+        : "No stores can join this delivery. Say nothing to the user about DoubleDash.",
+    });
+  },
+
+  async search_doubledash({ query, order_uuid, max_stores }) {
+    if (!(await ddCliAtLeast(CARD_SELECT_VERSION))) {
+      return j({
+        stores: [],
+        unsupported: true,
+        note: `DoubleDash needs dd-cli >= ${CARD_SELECT_VERSION}. ${upgradeHint(await ddCliVersion())}`,
+      });
+    }
+    const args = [
+      "doubledash",
+      "search",
+      "--query",
+      String(query),
+      "--order-uuid",
+      String(order_uuid),
+    ];
+    if (max_stores != null) args.push("--max-stores", String(max_stores));
+    const res = await ddJson(args, { retryOnce: true });
+    return j({
+      ...res,
+      note: "Pass this SAME query to add_doubledash_item along with the chosen store_id and item_id, or the add is rejected. Search works on placed orders only.",
+    });
+  },
+
+  async add_doubledash_item({
+    store_id,
+    item_id,
+    order_uuid,
+    cart_uuid,
+    menu_id,
+    quantity,
+    nested_options,
+    query,
+  }) {
+    if (!(await ddCliAtLeast(CARD_SELECT_VERSION))) {
+      return j({
+        success: false,
+        unsupported: true,
+        note: `DoubleDash needs dd-cli >= ${CARD_SELECT_VERSION}. ${upgradeHint(await ddCliVersion())}`,
+      });
+    }
+    const args = [
+      "doubledash",
+      "add",
+      "--store-id",
+      String(store_id),
+      "--item-id",
+      String(item_id),
+    ];
+    if (order_uuid) args.push("--order-uuid", String(order_uuid));
+    else if (cart_uuid) args.push("--cart-uuid", String(cart_uuid));
+    if (menu_id) args.push("--menu-id", String(menu_id));
+    if (quantity != null) args.push("--quantity", String(quantity));
+    if (nested_options)
+      args.push(
+        "--nested-options",
+        typeof nested_options === "string" ? nested_options : JSON.stringify(nested_options),
+      );
+    // Placed orders only — dd-cli rejects --query beside --cart-uuid.
+    if (query && order_uuid) args.push("--query", String(query));
+    const res = await ddJson(args);
+    // dd-cli's own guidance: a false link_confirmed means the item did not
+    // attach to the delivery. Submitting then charges a separate delivery,
+    // and re-adding duplicates the item.
+    if (res.link_confirmed === false) {
+      return j({
+        ...res,
+        link_confirmed: false,
+        note: "STOP: the item did not attach to the existing delivery (link_confirmed is false). Do NOT preview or submit this cart, and do NOT add the item again. Tell the user it could not be added to the same delivery.",
+      });
+    }
+    return j({
+      ...res,
+      note: "Returns a cart_id — preview_order it with that as cart_uuid, show the user the summary, and submit only on their go-ahead.",
     });
   },
 
@@ -918,12 +1309,15 @@ const RAW_TOOLS: Anthropic.Tool[] = [
   {
     name: "add_address",
     description:
-      "Save a candidate from find_address to the user's DoorDash account AND make it the ACCOUNT-WIDE default delivery address (persists across app/web). Prompts the user for approval first. Confirm the exact address with the user — including apartment/suite accuracy — before calling; a wrong address means a lost order.",
+      "Save a candidate from find_address to the user's DoorDash account. By default it ALSO becomes the ACCOUNT-WIDE default delivery address (persists across app/web) — pass set_default false for a one-off address (a friend's place, a hotel) so the user's home address stays the default. Prompts the user for approval first. Confirm the exact address with the user — including apartment/suite accuracy — before calling; a wrong address means a lost order.",
     input_schema: {
       type: "object",
       properties: {
         place_id: str("place_id of the chosen candidate from find_address"),
         printable_address: str("Human-readable address, shown in the confirmation prompt"),
+        set_default: bool(
+          "Default true. Pass false to save the address WITHOUT displacing the user's current default — needs dd-cli >= 0.2.6; on older binaries the address is saved and made default anyway, and the response says so.",
+        ),
       },
       required: ["place_id", "printable_address"],
     },
@@ -1126,7 +1520,7 @@ const RAW_TOOLS: Anthropic.Tool[] = [
   {
     name: "preview_order",
     description:
-      "Authoritative pricing + logistics for a cart (read-only, no charge): display_summary (show VERBATIM to the user), quote {net_total_before_tip = the real total, line_items fee breakdown, tips_suggestion (cents), delivery_availability ETAs, credits, PIN requirement, work budgets}, and the default card (brand+last4). Re-run after ANY cart change. Pass include_work_benefits when the user mentions work/office/company/team/expense or delivers to a Work address. Budget checks: compare the user's cap against net_total_before_tip (tip adds on top).",
+      "Authoritative pricing + logistics for a cart (read-only, no charge): display_summary (show VERBATIM to the user), quote {net_total_before_tip = the real total, line_items fee breakdown, tips_suggestion (cents), delivery_availability ETAs, credits, PIN requirement, work budgets}, and default_card (name it by display_name). Re-run after ANY cart change. Pass include_work_benefits when the user mentions work/office/company/team/expense or delivers to a Work address. Budget checks: compare the user's cap against net_total_before_tip (tip adds on top).",
     input_schema: {
       type: "object",
       properties: {
@@ -1144,6 +1538,9 @@ const RAW_TOOLS: Anthropic.Tool[] = [
         ),
         no_apply_credits: bool(
           "Opt OUT of applying DoorDash credits (they apply by default — do not prompt about them). Pass ONLY when the user explicitly asks not to use credits; all-or-nothing; pass the same flag at submit.",
+        ),
+        card_id: str(
+          "Price this order on a specific saved card (card_id from list_payment_methods). ASAP orders only — ignored with scheduled_time. Pass the SAME card_id to submit_order, or submit charges whatever the account default is then. Does NOT change the account default; use set_default_payment_method for that. Needs dd-cli >= 0.2.6.",
         ),
       },
       required: ["cart_uuid"],
@@ -1170,6 +1567,9 @@ const RAW_TOOLS: Anthropic.Tool[] = [
         team_account_id: str("Work benefits: budget's team_account_id when present"),
         expense_code: str("Required when budget expense_code_mode != NONE"),
         expense_notes: str("Required when budget is_expense_note_required"),
+        card_id: str(
+          "MUST match the preview: pass the same card_id the quote was priced on, so the card charged is the card the user was told about. ASAP orders only. With team_id/budget_id the card covers only what the budget doesn't.",
+        ),
       },
       required: ["cart_uuid", "tip_cents", "confirmation_summary"],
     },
@@ -1230,8 +1630,100 @@ const RAW_TOOLS: Anthropic.Tool[] = [
   {
     name: "list_payment_methods",
     description:
-      "Saved cards + which is default. Cards ONLY — wallets/gift cards are invisible here; never conclude 'no payment method' from an empty list (offer checkout-url instead).",
+      "Saved cards + which is default. Name a card to the user by display_name; card_id is for passing to preview_order/submit_order, never read aloud. Cards ONLY — wallets/gift cards are invisible here; never conclude 'no payment method' from an empty list (offer checkout-url instead). Skip any card with is_expired true.",
     input_schema: { type: "object", properties: {}, required: [] },
+  },
+  {
+    name: "set_default_payment_method",
+    description:
+      "Change the ACCOUNT-WIDE default card — persists across the DoorDash app/web and every future order. Use ONLY when the user asks to change their default. To pay for ONE order on another card, pass card_id to preview_order and submit_order instead. Prompts the user at the terminal. Re-preview any existing cart afterwards. Needs dd-cli >= 0.2.6.",
+    input_schema: {
+      type: "object",
+      properties: {
+        card_id: str("card_id from list_payment_methods"),
+        display_name: str("The card's display_name, shown in the confirmation prompt"),
+      },
+      required: ["card_id"],
+    },
+  },
+  {
+    name: "find_item_across_retailers",
+    description:
+      "Compare ONE grocery/retail item's price across nearby stores — use when the user asks who has something cheapest. Retail and grocery only, never restaurants. To search inside one store already chosen, use find_items instead. Only compare prices across rows with the same purchase_type AND measurement_unit; rows with unavailable_reason have no confirmed price. Empty results means no nearby store carries it — widen radius before saying it doesn't exist. Needs dd-cli >= 0.2.6.",
+    input_schema: {
+      type: "object",
+      properties: {
+        query: str("Item name, e.g. 'whole milk' or '2qt saucepan'"),
+        lat: num("Latitude; omit to use the user's default saved address"),
+        lng: num("Longitude; omit to use the user's default saved address"),
+        max: int("Max rows across all stores, 1-50 (default 20)"),
+        radius: num("Search radius in miles (default 5) — widen when results are empty"),
+      },
+      required: ["query"],
+    },
+  },
+  {
+    name: "get_meal_manager_calendars",
+    description:
+      "Corporate Meal Manager (DoorDash for Work) calendars and their dated group carts. An EMPTY calendars list is the normal result for anyone not on a Meal Manager team — report that plainly, never as an error. Join a listed cart via add_items_to_cart with its cart_id as cart_uuid plus group_cart. Needs dd-cli >= 0.2.6.",
+    input_schema: {
+      type: "object",
+      properties: {
+        date: str("ISO date YYYY-MM-DD for a single day; omit for a two-week window from today"),
+      },
+      required: [],
+    },
+  },
+  {
+    name: "list_doubledash_options",
+    description:
+      "Stores whose items can join an EXISTING delivery with no extra delivery fee. Offer this after an order is placed — get_order_status carries a `doubledash` offer with an expires_at; only offer while that deadline is still in the future, and tell the user the deadline. Say nothing about DoubleDash when there is no offer, it has expired, or stores is empty. Pass order_uuid for a placed order or cart_uuid for an unsubmitted delivery cart. Needs dd-cli >= 0.2.6.",
+    input_schema: {
+      type: "object",
+      properties: {
+        order_uuid: str("A placed order's UUID — this or cart_uuid"),
+        cart_uuid: str("An unsubmitted delivery cart — this or order_uuid"),
+        max_stores: int("Most stores to return, 1-20 (default 10)"),
+      },
+      required: [],
+    },
+  },
+  {
+    name: "search_doubledash",
+    description:
+      "Search for a specific item across the stores that can join a placed order's delivery, when the suggested items in list_doubledash_options don't cover what the user wants. Placed orders only. Pass the SAME query to add_doubledash_item. Needs dd-cli >= 0.2.6.",
+    input_schema: {
+      type: "object",
+      properties: {
+        query: str("What to search for, 1-100 characters"),
+        order_uuid: str("The placed order's UUID"),
+        max_stores: int("Most stores to return, 1-20 (default 10)"),
+      },
+      required: ["query", "order_uuid"],
+    },
+  },
+  {
+    name: "add_doubledash_item",
+    description:
+      "Add ONE item from an offered store to an existing delivery. Returns a cart_id — then preview_order it as cart_uuid, show the user the summary, and submit only on their go-ahead. If the response has link_confirmed false the item did NOT attach: do not preview, do not submit, and do not add it again — tell the user. Needs dd-cli >= 0.2.6.",
+    input_schema: {
+      type: "object",
+      properties: {
+        store_id: str("stores[].store_id from list_doubledash_options or search_doubledash"),
+        item_id: str("items[].item_id from that store"),
+        order_uuid: str("A placed order's UUID — this or cart_uuid"),
+        cart_uuid: str("An unsubmitted delivery cart — this or order_uuid"),
+        menu_id: str("items[].menu_id from the same item; omit only when it had none"),
+        quantity: int("How many, 1-20 (default 1)"),
+        nested_options: str(
+          'JSON array of chosen options when the item has requires_options true, e.g. \'[{"id":"<group_id>","options":[{"id":"<option_id>","quantity":1}]}]\'',
+        ),
+        query: str(
+          "The query passed to search_doubledash, when the item came from that search. Placed orders only — not allowed with cart_uuid",
+        ),
+      },
+      required: ["store_id", "item_id"],
+    },
   },
   {
     name: "list_promos",

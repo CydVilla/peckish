@@ -58,7 +58,24 @@ function run(argv, { json = true } = {}) {
       if (!json) return resolve({ ok: true, text: stdout });
       try {
         const env = JSON.parse(stdout);
-        resolve({ ok: true, payload: env.structuredContent ?? {}, isError: env.isError });
+        // dd-cli <=0.2.5 wrapped responses in structuredContent; 0.2.6 prints
+        // the response object itself, with a text-only reply as the lone
+        // exception. Reading structuredContent alone made every 0.2.6 check
+        // here report an empty payload — the same bug src/ddcli.ts had.
+        let payload;
+        if (env && typeof env === "object" && env.structuredContent) {
+          payload = env.structuredContent;
+        } else if (env && typeof env === "object" && Array.isArray(env.content) && Object.keys(env).length === 1) {
+          const text = env.content.find((c) => c?.type === "text")?.text;
+          try {
+            payload = text ? JSON.parse(text) : {};
+          } catch {
+            payload = { message: text };
+          }
+        } else {
+          payload = env && typeof env === "object" ? env : {};
+        }
+        resolve({ ok: true, payload, isError: env?.isError });
       } catch {
         resolve({ ok: false, error: `non-JSON output: ${stdout.slice(0, 300)}` });
       }
@@ -203,6 +220,109 @@ if (orders.length) {
 } else {
   record("history rows expose group-order fields (0.2.3)", null, "no past orders on this account");
 }
+
+// --- payment methods (0.2.6 reshaped this response) ------------------------
+console.log("\nPayment methods");
+const pm = await run(["payment-method", "list"]);
+if (!pm.ok) {
+  record("payment-method list", false, pm.error);
+} else {
+  const rows = pm.payload.payment_methods ?? pm.payload.cards ?? [];
+  const shape = pm.payload.payment_methods
+    ? "0.2.6 (payment_methods[])"
+    : pm.payload.cards
+      ? "0.2.5 (cards[])"
+      : "neither key present";
+  record("payment-method list", true, `${rows.length} card(s), shape: ${shape}`);
+  if (rows.length) {
+    console.log(`  ${DIM}card keys: ${Object.keys(rows[0]).join(", ")}${OFF}`);
+    // Peckish reads card_id/display_name/is_default on 0.2.6 and falls back
+    // to payment_method_id/brand+last4/default_payment_method_id on 0.2.5.
+    const hasNew = "card_id" in rows[0] || "display_name" in rows[0] || "is_default" in rows[0];
+    const hasOld = "payment_method_id" in rows[0] || "brand" in rows[0];
+    record(
+      "a card id and a human label are readable (either shape)",
+      hasNew || hasOld,
+      hasNew ? "0.2.6 names present" : hasOld ? "0.2.5 names present" : "NEITHER — readSavedCards would return blanks",
+    );
+    record(
+      "exactly one card is marked default",
+      rows.filter((c) => c.is_default === true).length === 1 ||
+        (pm.payload.default_payment_method_id != null ? true : null),
+      `is_default true on ${rows.filter((c) => c.is_default === true).length}; ` +
+        `default_payment_method_id: ${pm.payload.default_payment_method_id ?? "(absent)"}`,
+    );
+  }
+  if (pm.payload.unlisted_count != null)
+    console.log(`  ${DIM}unlisted_count: ${pm.payload.unlisted_count} (0.2.6)${OFF}`);
+}
+
+// --- 0.2.6 commands --------------------------------------------------------
+console.log("\n0.2.6 additions");
+const mm = await run(["meal-manager", "get-calendars"]);
+// `gated` (exit 4) means this account is not enrolled — a real answer about
+// the account, not a flag Peckish got wrong. Scoring it as a failure would
+// make a correct build look broken on any non-corporate account.
+const mmGated = !mm.ok && /"code":\s*"gated"|TOOL_FORBIDDEN/.test(mm.error ?? "");
+record(
+  "meal-manager get-calendars (0.2.6)",
+  mmGated ? null : mm.ok,
+  mmGated
+    ? "account not enrolled in Meal Manager (gated) — Peckish reports this as not_enabled, not an error"
+    : mm.ok
+      ? `calendars: ${(mm.payload.calendars ?? []).length} (empty is normal)`
+      : mm.error,
+);
+
+if (defaultAddress?.lat != null && defaultAddress?.lng != null) {
+  const across = await run([
+    "find-item-across-retailers",
+    "-q",
+    "whole milk",
+    "--lat",
+    String(defaultAddress.lat),
+    "--lng",
+    String(defaultAddress.lng),
+    "--max",
+    "5",
+  ]);
+  record(
+    "find-item-across-retailers (0.2.6)",
+    across.ok,
+    across.ok
+      ? `${(across.payload.results ?? []).length} row(s); keys: ${
+          (across.payload.results ?? [])[0]
+            ? Object.keys(across.payload.results[0]).join(", ")
+            : "(no rows)"
+        }`
+      : across.error,
+  );
+} else {
+  record("find-item-across-retailers (0.2.6)", null, "default address carries no lat/lng");
+}
+
+// doubledash takes NO --intent, and is account-gated: a refusal is a real
+// answer about this account, not a Peckish bug.
+// Needs exactly one of --order-uuid / --cart-uuid, so it can only run when
+// this account has a past order to point at.
+const ddOrderUuid = orders.length ? String(orders[0].order_uuid) : null;
+const ddOpts = ddOrderUuid === null ? null : await new Promise((resolve) => {
+  execFile(
+    DD_CLI,
+    ["--json-output", "doubledash", "options", "--order-uuid", ddOrderUuid, "--max-stores", "3"],
+    { timeout: 90_000, maxBuffer: 32 * 1024 * 1024 },
+    (err, stdout, stderr) => resolve({ err, out: `${stdout}\n${stderr}`.trim() }),
+  );
+});
+record(
+  "doubledash options reachable without --intent (0.2.6)",
+  ddOpts === null || ddOpts.err ? null : true,
+  ddOpts === null
+    ? "no past order to attach a DoubleDash lookup to"
+    : ddOpts.err
+      ? `not available on this account/order: ${ddOpts.out.slice(0, 200)}`
+      : "accepted",
+);
 
 // --- summary ---------------------------------------------------------------
 const failed = results.filter((r) => r.ok === false);
