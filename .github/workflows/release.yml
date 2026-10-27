@@ -110,6 +110,18 @@ jobs:
           echo "already=$FOUND" >> "$GITHUB_OUTPUT"
           echo "$NAME@$VER already registered: $FOUND"
 
+      # The registry rejects a server whose npm package it cannot see yet, and
+      # npm's read path lags the publish that just happened in the job above.
+      - name: Wait for peckish-mcp on npm
+        if: steps.check.outputs.already == 'no'
+        run: |
+          V=$(node -p "require('./server.json').packages[0].version")
+          for i in $(seq 1 30); do
+            npm view "peckish-mcp@$V" version >/dev/null 2>&1 && echo "peckish-mcp@$V available" && exit 0
+            echo "waiting for peckish-mcp@$V ($i)…"; sleep 10
+          done
+          echo "peckish-mcp@$V never appeared on npm"; exit 1
+
       - name: Authenticate (OIDC)
         if: steps.check.outputs.already == 'no'
         run: ./mcp-publisher login github-oidc
@@ -138,6 +150,14 @@ jobs:
           echo "peckish@$V never appeared on npm"; exit 1
 
       - run: npm install -g @anthropic-ai/mcpb
+
+      # build-manifest.mjs imports ../dist/tools.js on purpose (the manifest
+      # must list this commit's tools, not the vendored package's), so the
+      # repo's own tool layer has to exist before it runs.
+      - name: Build the repo's tool layer
+        run: |
+          npm ci
+          npm run build
 
       - name: Vendor the published server
         working-directory: extension
