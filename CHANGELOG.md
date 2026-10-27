@@ -105,6 +105,30 @@ file's section for that version, every downloadable artifact, and a
   doesn't use this" is the ordinary case, not a fault. `verify-dd-cli.mjs`
   scores `gated` as a skip rather than a failure for the same reason.
 
+### Also new since 0.4.0
+
+0.5.0 was versioned on 2026-09-25 but never tagged, so no release carried it.
+Everything in it reaches users for the first time here; its own section below
+has the detail.
+
+- **Guest sub-carts** — add items for people with no DoorDash account to a
+  group cart you host, by name. The per-guest `guest_token` is a bearer
+  credential and never reaches the model or the audit log.
+- **dd-cli 0.2.3–0.2.5 support** — address lookup, promo-aware menus priced
+  against your saved address, search filters (DashPass, price tier, distance,
+  ETA), pickup and schedule-ahead availability, weight-priced items, group
+  orders in history, and the full order lifecycle behind "where's my food?".
+- **Linux (x86_64)** on the terminal, web and MCP surfaces, plus **browserless
+  sign-in** via `dd-cli export-token` for containers and cloud hosts.
+- **Sign-in assist** — when DoorDash sign-in is missing or expired, Peckish
+  offers to run `dd-cli login` for you behind an approval prompt instead of
+  sending you to a terminal.
+- **`submit_order` could never confirm an order it had just placed** — the
+  poll read a field dd-cli does not return, so every submit burned its full
+  40-second budget and then handed the model a contract it could not satisfy.
+- **Three guest-token leak paths closed**, found by adversarial testing.
+
+
 ## [0.5.0] - 2026-09-25
 
 ### Security
