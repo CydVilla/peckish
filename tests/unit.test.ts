@@ -4,7 +4,15 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { stripUiFields, isTransient, formatIntent, findGuestToken, DdCliError } from "../src/ddcli.js";
+import {
+  stripUiFields,
+  isTransient,
+  formatIntent,
+  findGuestToken,
+  DdCliError,
+  unwrapPayload,
+  parseErrorLine,
+} from "../src/ddcli.js";
 import { guestKey } from "../src/guests.js";
 import {
   tools,
@@ -13,6 +21,7 @@ import {
   carryThrough,
   carriesSignal,
   classifyOrderStatus,
+  readSavedCards,
 } from "../src/tools.js";
 import { addUsage, EMPTY_USAGE, estimateCostUsd, formatCost } from "../src/costs.js";
 import { isAuthError } from "../src/signin.js";
@@ -525,4 +534,130 @@ test("popularity keys carry through the menu trimmer", () => {
     assert.equal(carriesSignal(k), true, `${k} must reach the model`);
   }
   assert.equal(carriesSignal("popsicle_id"), false, "substring matches must not qualify");
+});
+
+// ---------------------------------------------------------------------------
+// ddcli: the 0.2.6 response envelope change
+// ---------------------------------------------------------------------------
+
+test("unwrapPayload reads the <=0.2.5 structuredContent envelope", () => {
+  const payload = unwrapPayload({
+    structuredContent: { cart_id: "c1", success: true },
+    content: [{ type: "text", text: "ignored" }],
+    isError: false,
+  });
+  assert.deepEqual(payload, { cart_id: "c1", success: true });
+});
+
+test("unwrapPayload reads a bare 0.2.6 response object", () => {
+  // 0.2.6 dropped the envelope entirely: stdout IS the response. Before this,
+  // every command against a 0.2.6 binary failed with "empty response".
+  const payload = unwrapPayload({ cart_id: "c1", success: true, message: null });
+  assert.equal(payload?.cart_id, "c1");
+  assert.equal(payload?.success, true);
+});
+
+test("unwrapPayload reads the 0.2.6 text-only envelope", () => {
+  assert.deepEqual(unwrapPayload({ content: [{ type: "text", text: "all set" }] }), {
+    message: "all set",
+  });
+  // JSON inside the text node is parsed rather than stringified into message.
+  assert.deepEqual(unwrapPayload({ content: [{ type: "text", text: '{"ok":1}' }] }), { ok: 1 });
+});
+
+test("unwrapPayload keeps a 0.2.6 payload that has its own content key", () => {
+  // The text-only envelope is {content: [...]} and NOTHING else. A real
+  // payload carrying `content` beside other keys must survive intact.
+  const payload = unwrapPayload({
+    content: [{ type: "text", text: "not an envelope" }],
+    store_id: "s1",
+  });
+  assert.equal(payload?.store_id, "s1");
+  assert.ok(Array.isArray(payload?.content));
+});
+
+test("unwrapPayload reports nothing usable as null", () => {
+  assert.equal(unwrapPayload(null), null);
+  assert.equal(unwrapPayload({}), null);
+  assert.equal(unwrapPayload([1, 2]), null);
+  assert.equal(unwrapPayload("text"), null);
+});
+
+// ---------------------------------------------------------------------------
+// ddcli: 0.2.6 error codes
+// ---------------------------------------------------------------------------
+
+test("parseErrorLine finds the 0.2.6 error line among other stderr output", () => {
+  const stderr = 'some warning\n{"error": {"code": "rate_limited", "message": "slow down"}}\n';
+  assert.deepEqual(parseErrorLine(stderr), { code: "rate_limited", message: "slow down" });
+  assert.equal(parseErrorLine("plain prose failure\n"), null);
+  assert.equal(parseErrorLine('{"not_an_error": 1}'), null);
+});
+
+test("isTransient trusts the 0.2.6 code over the prose", () => {
+  const retryable = ["timeout", "unreachable", "rate_limited"];
+  for (const code of retryable) {
+    assert.ok(isTransient(new DdCliError("failed", "", code)), `${code} should retry`);
+  }
+  // The regex below would have matched "try again" and retried a settled no.
+  for (const code of ["gated", "tool", "auth_expired", "server", "unknown"]) {
+    assert.ok(
+      !isTransient(new DdCliError("failed, try again", "temporarily", code)),
+      `${code} must never auto-retry`,
+    );
+  }
+  // Pre-0.2.6 binaries carry no code, so the prose fallback still applies.
+  assert.ok(isTransient(new DdCliError("request timed out")));
+  assert.ok(!isTransient(new DdCliError("dd-cli binary not found")));
+});
+
+// ---------------------------------------------------------------------------
+// tools: payment-method shapes across 0.2.5 and 0.2.6
+// ---------------------------------------------------------------------------
+
+test("readSavedCards reads the 0.2.6 payment_methods shape", () => {
+  const { cards, unlisted_count } = readSavedCards({
+    payment_methods: [
+      { card_id: "pm_1", display_name: "Visa ending in 4242", is_default: true, is_expired: false },
+      { card_id: "pm_2", display_name: "Amex ending in 0005", is_default: false, is_expired: true },
+    ],
+    unlisted_count: 3,
+  });
+  assert.equal(cards.length, 2);
+  assert.equal(cards[0].card_id, "pm_1");
+  assert.equal(cards[0].display_name, "Visa ending in 4242");
+  assert.equal(cards[0].is_default, true);
+  assert.equal(cards[1].is_default, false);
+  assert.equal(cards[1].is_expired, true);
+  assert.equal(unlisted_count, 3);
+});
+
+test("readSavedCards still reads the 0.2.5 cards shape", () => {
+  // 0.2.5: cards[], payment_method_id, brand + last4, top-level default id.
+  const { cards } = readSavedCards({
+    cards: [
+      { payment_method_id: "a", brand: "Visa", last4: "4242" },
+      { payment_method_id: "b", brand: "Amex", last4: "0005" },
+    ],
+    default_payment_method_id: "b",
+  });
+  assert.equal(cards[0].card_id, "a");
+  assert.equal(cards[0].display_name, "Visa ending in 4242", "synthesized from brand + last4");
+  assert.equal(cards[0].is_default, false);
+  assert.equal(cards[1].is_default, true, "matched against default_payment_method_id");
+});
+
+test("readSavedCards marks no card default when neither shape says so", () => {
+  // Regression: `undefined === undefined` once marked EVERY card default,
+  // which would have named the wrong card before a real charge.
+  const { cards } = readSavedCards({ payment_methods: [{}, {}] });
+  assert.deepEqual(
+    cards.map((c) => c.is_default),
+    [false, false],
+  );
+});
+
+test("readSavedCards returns an empty list rather than throwing on junk", () => {
+  assert.deepEqual(readSavedCards({}).cards, []);
+  assert.equal(readSavedCards({}).unlisted_count, undefined);
 });

@@ -23,11 +23,13 @@ export const DD_CLI_MIN_VERSION = "0.2.1";
 
 /**
  * The dd-cli Peckish is built against. Below this, ordering still works, but
- * address lookup (0.2.3), promo-aware menus and `--address-id` (0.2.4), and
- * the search filters, pickup availability and weight-priced items (0.2.5) are
- * unavailable — Peckish detects the version and leaves those paths off.
+ * address lookup (0.2.3), promo-aware menus and `--address-id` (0.2.4), the
+ * search filters, pickup availability and weight-priced items (0.2.5), and
+ * card selection, DoubleDash, cross-retailer pricing and Meal Manager
+ * calendars (0.2.6) are unavailable — Peckish detects the version and leaves
+ * those paths off.
  */
-export const DD_CLI_RECOMMENDED_VERSION = "0.2.5";
+export const DD_CLI_RECOMMENDED_VERSION = "0.2.6";
 
 /** Parse the first semver-looking token out of `dd-cli --version` output. */
 export function parseVersion(output: string): string | null {
@@ -61,6 +63,10 @@ export function ddCliVersionLine(version: string | null | undefined): string {
     missing.push("promo-aware menus and address_id search");
   if (compareVersions(version, "0.2.5") < 0)
     missing.push("search filters, pickup availability and weight-priced items");
+  if (compareVersions(version, "0.2.6") < 0)
+    missing.push(
+      "paying on a chosen card, DoubleDash, cross-retailer price comparison and Meal Manager calendars",
+    );
   return (
     `${version} — older than the ${DD_CLI_RECOMMENDED_VERSION} Peckish targets, so these are ` +
     `unavailable: ${missing.join("; ")}. Mention the upgrade only if the user asks for one of them.`

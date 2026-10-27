@@ -6,6 +6,94 @@ versions follow semver (0.x: minor = features, patch = fixes). Each release on
 file's section for that version, every downloadable artifact, and a
 `SHA256SUMS.txt` to verify them.
 
+## [Unreleased]
+
+### Fixed
+- **dd-cli 0.2.6 removed the JSON envelope, and that broke every command.**
+  Up to 0.2.5, `--json-output` wrapped each response in an MCP-shaped envelope
+  and the payload sat under `structuredContent`. 0.2.6 prints the response
+  object itself, already parsed, with no envelope at all. Peckish read
+  `structuredContent` and fell back to `content[]`, so against a 0.2.6 binary
+  every single tool call — search, menus, carts, preview, submit — failed with
+  "dd-cli returned an empty response". Envelope handling moved into an
+  exported `unwrapPayload()` that accepts both shapes: the 0.2.5 envelope, the
+  bare 0.2.6 object, and 0.2.6's one remaining text-only form
+  (`{"content": [...]}` and nothing else). That last case is matched only when
+  `content` is the lone key, so a real payload carrying its own `content`
+  survives intact. `scripts/verify-dd-cli.mjs` had the identical bug and is
+  fixed the same way.
+- **`payment-method list` was reshaped in 0.2.6, and Peckish read the old
+  names.** `cards[]` became `payment_methods[]`, `payment_method_id` became
+  `card_id`, `brand`/`last4` collapsed into `display_name`, and the top-level
+  `default_payment_method_id` pointer became a per-card `is_default`. Reading
+  only the 0.2.5 names yielded an empty list and a null default card — which
+  reads to the model as "no payment method on file", the exact conclusion the
+  command's own help warns never to draw, and which would have been said to
+  the user immediately before a real charge. A new `readSavedCards()` accepts
+  both shapes and synthesizes `display_name` from brand + last4 on older
+  binaries. It also refuses to mark a card default on absent data: comparing
+  two `undefined`s had marked *every* card the default.
+- **Exit-code 4 and 7 failures could be auto-retried.** `isTransient()`
+  pattern-matched the error prose, so a `gated` ("not enabled for this
+  account") or `tool` ("rejected, invalid input") failure whose message
+  happened to contain "try again" was replayed. 0.2.6 categorizes failures by
+  exit status and an `error.code` on stderr; `isTransient()` now trusts that
+  code where present and only retries `timeout`, `unreachable` and
+  `rate_limited`, keeping the regex as the fallback for older binaries. `gated`
+  gets a plain message telling the model not to retry, and auth detection no
+  longer depends on matching message text.
+- **`address add` never passed `--yes`.** dd-cli prompts interactively without
+  it, which a non-TTY call cannot answer.
+
+### Added
+- **dd-cli 0.2.6 support**, with `DD_CLI_RECOMMENDED_VERSION` bumped to match.
+  Every addition is version-gated, so an older binary is told what it is
+  missing rather than sent a flag it would reject mid-order.
+  - **Paying on a chosen card.** `preview_order` and `submit_order` take
+    `card_id`; the preview prices that card and reports it, and submit charges
+    exactly it. ASAP orders only — dd-cli rejects `--card-id` beside
+    `--scheduled-time`, so a scheduled order is priced on the account default
+    and the response says so rather than failing after the user has already
+    approved it at the terminal gate. `list_payment_methods` now surfaces
+    `display_name`, `is_expired` and `unlisted_count`, and the prompts name
+    cards by `display_name` and never read a `card_id` aloud. A separate
+    `set_default_payment_method` changes the account-wide default behind the
+    same confirmation gate as `set_default_address`.
+  - **DoubleDash** — adding items from another store to a delivery already in
+    flight, at no extra delivery fee: `list_doubledash_options`,
+    `search_doubledash` and `add_doubledash_item`. `get_order_status` now
+    resolves the offer's `expires_at` itself and emits `doubledash_offer` only
+    while it is still live, so the model is never left comparing timestamps
+    and never offers an expired one. A `link_confirmed: false` add returns a
+    stop instruction: the item did not attach, so previewing or re-adding
+    would charge a second delivery or double the item. These commands take no
+    `--intent`, which `NO_INTENT_COMMANDS` now reflects.
+  - **`find_item_across_retailers`** — one grocery or retail item priced
+    across nearby stores. The command takes coordinates only, so a saved
+    address is resolved to lat/lng first. The tool description and prompts
+    carry dd-cli's own two caveats: compare only rows sharing `purchase_type`
+    and `measurement_unit`, and never quote a row with `unavailable_reason`.
+  - **`get_meal_manager_calendars`** — corporate Meal Manager calendars and
+    their dated group carts. An empty list is the normal result for anyone not
+    on a Meal Manager team, and both prompts say to report it plainly rather
+    than as an error.
+  - **`add_address` takes `set_default: false`**, so a one-off address (a
+    friend's place, a hotel) no longer displaces the user's home address. The
+    confirmation prompt changes wording to match what will actually happen.
+
+### Notes
+- dd-cli 0.2.6's **courier delivery** (`courier preview/start/submit/update`)
+  and **DoorDash for Business team admin** (`ddfb team add-members` /
+  `remove-members`) are deliberately not wired up: neither is food ordering,
+  and courier carries its own consent gate and prohibited-items policy that
+  deserve their own change. Two-step sign-in (`login --start` / `--finish`)
+  is likewise still unimplemented — Peckish's existing browser and
+  `export-token` paths cover the same machines today.
+- Flag and field names here were read from `--help` on a real 0.2.6 binary
+  rather than from the release notes, which is how the two breaking changes
+  above were caught. The response *shapes* of the new commands still want a
+  live signed-in run: `node scripts/verify-dd-cli.mjs` now covers them.
+
 ## [0.5.0] - 2026-09-25
 
 ### Security

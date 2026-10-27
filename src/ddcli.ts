@@ -86,10 +86,60 @@ export class DdCliError extends Error {
   constructor(
     message: string,
     public readonly detail?: string,
+    /** dd-cli >=0.2.6 `error.code`, when the failure carried one. */
+    public readonly code?: DdErrorCode,
+    /** Process exit status; 0.2.6 categorizes failures by it. */
+    public readonly exitCode?: number,
   ) {
     super(message);
     this.name = "DdCliError";
   }
+}
+
+/**
+ * dd-cli >=0.2.6 error taxonomy. Before 0.2.6 every failure was exit 1 with
+ * prose, so Peckish had to pattern-match the message text to tell an expired
+ * sign-in from a rate limit. These codes replace the guessing — but the set
+ * is open, so an unrecognized code is treated as `unknown`, per dd-cli.
+ */
+export type DdErrorCode =
+  | "auth_expired"
+  | "auth_forbidden"
+  | "auth_missing"
+  | "keychain_unavailable"
+  | "gated"
+  | "timeout"
+  | "unreachable"
+  | "rate_limited"
+  | "server"
+  | "bad_response"
+  | "tool"
+  | "unknown";
+
+const AUTH_CODES = new Set(["auth_expired", "auth_forbidden", "auth_missing", "keychain_unavailable"]);
+/** Exit 5: the call may be replayed — for reads. A timed-out write may have landed. */
+const TRANSIENT_CODES = new Set(["timeout", "unreachable", "rate_limited"]);
+
+/**
+ * `{"error": {"code": "...", "message": "..."}}` — one line on stderr from
+ * dd-cli >=0.2.6. Older releases print prose, so a miss here is normal.
+ */
+export function parseErrorLine(
+  stderr: string,
+): { code: DdErrorCode; message: string } | null {
+  for (const line of stderr.split("\n")) {
+    const t = line.trim();
+    if (!t.startsWith("{")) continue;
+    try {
+      const e = (JSON.parse(t) as any)?.error;
+      if (e && typeof e.code === "string") {
+        return { code: e.code as DdErrorCode, message: String(e.message ?? "") };
+      }
+    } catch {
+      // Not the error line — keep looking.
+    }
+  }
+  return null;
 }
 
 function execDd(args: string[]): Promise<{ stdout: string; stderr: string }> {
@@ -104,24 +154,59 @@ function execDd(args: string[]): Promise<{ stdout: string; stderr: string }> {
           // reaches the model and the audit log from several call sites — so
           // it is scrubbed here, at the one place all of them share.
           const detail = redactGuestTokens(`${stdout}\n${stderr}`.trim());
-          if (
-            /missing credentials|sign in with dd-cli login|token has expired|failed to authenticate|try running dd-cli login|DD_CLI_ACCESS_TOKEN|invalid access token/i.test(
-              detail,
-            )
+          // dd-cli >=0.2.6 states the category outright; older releases only
+          // have prose, so the regex stays as the fallback for them.
+          const structured = parseErrorLine(stderr);
+          const exitCode = typeof err.code === "number" ? err.code : undefined;
+          const code = structured?.code;
+
+          if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+            reject(
+              new DdCliError(`dd-cli binary not found (looked for: ${DD_CLI}). ${installHint()}`),
+            );
+          } else if (
+            (code && AUTH_CODES.has(code)) ||
+            (!code &&
+              /missing credentials|sign in with dd-cli login|token has expired|failed to authenticate|try running dd-cli login|DD_CLI_ACCESS_TOKEN|invalid access token/i.test(
+                detail,
+              ))
           ) {
             // The fix differs per environment: browser login on a desktop,
             // an injected DD_CLI_ACCESS_TOKEN in a headless container.
             reject(
-              new DdCliError(`DoorDash sign-in is missing or expired. ${signinHint()}`, detail),
+              new DdCliError(
+                `DoorDash sign-in is missing or expired. ${signinHint()}`,
+                detail,
+                code,
+                exitCode,
+              ),
             );
-          } else if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+          } else if (code === "gated") {
+            // Exit 4 is a settled no: the account lacks this feature.
+            // Retrying it only burns calls and misleads the user.
             reject(
-              new DdCliError(`dd-cli binary not found (looked for: ${DD_CLI}). ${installHint()}`),
+              new DdCliError(
+                "This DoorDash account is not enabled for that feature or action. Do not retry — tell the user it is unavailable on their account.",
+                detail,
+                code,
+                exitCode,
+              ),
             );
           } else if (err.killed) {
-            reject(new DdCliError(`dd-cli timed out after ${TIMEOUT_MS / 1000}s`, detail));
+            reject(
+              new DdCliError(`dd-cli timed out after ${TIMEOUT_MS / 1000}s`, detail, code, exitCode),
+            );
           } else {
-            reject(new DdCliError(`dd-cli exited with an error`, detail || err.message));
+            reject(
+              new DdCliError(
+                structured?.message
+                  ? `dd-cli failed (${code}): ${structured.message}`
+                  : `dd-cli exited with an error`,
+                detail || err.message,
+                code,
+                exitCode,
+              ),
+            );
           }
           return;
         }
@@ -163,8 +248,12 @@ export function formatIntent(raw: string | null): string {
   return `Summary: ${summary}\nuser prompt/purpose: "(not shared — Peckish privacy default)"`;
 }
 
-/** Commands that do not accept --intent. */
-const NO_INTENT_COMMANDS = new Set(["login"]);
+/**
+ * Commands that do not accept --intent. `doubledash` is dd-cli's own stated
+ * exception (0.2.6); `auth` and `export-token` run before there is a session
+ * to describe. Passing --intent to any of them is a usage error (exit 2).
+ */
+const NO_INTENT_COMMANDS = new Set(["login", "doubledash", "auth", "export-token"]);
 
 function withIntent(args: string[]): string[] {
   if (args.length && NO_INTENT_COMMANDS.has(args[0])) return args;
@@ -177,6 +266,10 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 /** Errors observed to be transient backend/CLI hiccups worth one retry. */
 export function isTransient(err: unknown): boolean {
   if (!(err instanceof DdCliError)) return false;
+  // dd-cli >=0.2.6 says so directly. Trust the code over the prose: exit 4
+  // (gated) and exit 7 (rejected) must never be retried, and both used to
+  // slip past the regex below on words like "try again".
+  if (err.code) return TRANSIENT_CODES.has(err.code);
   const text = `${err.message} ${err.detail ?? ""}`;
   if (/sign-in is missing|binary not found/i.test(text)) return false;
   return /Input validation error|session_id|timed out|temporarily|try again|50\d/i.test(text);
@@ -231,6 +324,46 @@ export function findGuestToken(value: unknown, depth = 0): string | null {
   return null;
 }
 
+/**
+ * The response object out of whatever `--json-output` printed.
+ *
+ * dd-cli changed this shape in 0.2.6. Up to 0.2.5 every response was wrapped
+ * in an MCP-shaped envelope and the real payload sat under
+ * `structuredContent`. From 0.2.6 stdout IS the response object, already
+ * parsed, with no envelope at all — so reading only `structuredContent`
+ * turned every single command into "dd-cli returned an empty response". The
+ * one exception 0.2.6 keeps is a response that is *only* plain text, which
+ * still arrives as `{"content": [{"type": "text", "text": "..."}]}`.
+ *
+ * Returns null when there is no usable object, which the caller reports.
+ */
+export function unwrapPayload(envelope: unknown): Record<string, unknown> | null {
+  if (!envelope || typeof envelope !== "object" || Array.isArray(envelope)) return null;
+  const env = envelope as {
+    structuredContent?: Record<string, unknown>;
+    content?: Array<{ type: string; text?: string }>;
+  };
+
+  let payload: Record<string, unknown> | undefined;
+  if (env.structuredContent) {
+    payload = env.structuredContent;
+  } else if (Array.isArray(env.content) && env.content.length && Object.keys(env).length === 1) {
+    // `length === 1` matters: on 0.2.6 an ordinary payload that happens to
+    // carry its own `content` key must not be mistaken for the text envelope.
+    const text = env.content.find((c) => c?.type === "text")?.text;
+    if (text) {
+      try {
+        payload = JSON.parse(text) as Record<string, unknown>;
+      } catch {
+        payload = { message: text };
+      }
+    }
+  } else {
+    payload = env as Record<string, unknown>;
+  }
+  return payload && Object.keys(payload).length ? payload : null;
+}
+
 async function ddJsonOnce(args: string[]): Promise<Record<string, unknown>> {
   const { stdout } = await execDd(["--json-output", ...withIntent(args)]);
   let envelope: unknown;
@@ -239,28 +372,14 @@ async function ddJsonOnce(args: string[]): Promise<Record<string, unknown>> {
   } catch {
     throw new DdCliError("dd-cli returned non-JSON output", stdout.slice(0, 2000));
   }
-  const env = envelope as {
-    structuredContent?: Record<string, unknown>;
-    content?: Array<{ type: string; text?: string }>;
-    isError?: boolean;
-  };
-  let payload = env.structuredContent;
-  if (!payload && env.content?.length) {
-    // Fallback: some responses may only carry stringified JSON in content[]
-    const text = env.content.find((c) => c.type === "text")?.text;
-    if (text) {
-      try {
-        payload = JSON.parse(text) as Record<string, unknown>;
-      } catch {
-        payload = { message: text };
-      }
-    }
-  }
-  if (!payload) throw new DdCliError("dd-cli returned an empty response");
+  const payload = unwrapPayload(envelope);
+  if (!payload) throw new DdCliError("dd-cli returned an empty response", stdout.slice(0, 2000));
   // Unstripped on purpose — ddJson strips on the way out, so the one caller
   // that needs the guest token can read it first.
-  if (env.isError) payload = { ...payload, _cli_is_error: true };
-  return payload;
+  // `isError` is the <=0.2.5 envelope flag; 0.2.6 signals failure by exit
+  // code and the stderr error line instead, handled in execDd.
+  const { isError } = envelope as { isError?: boolean };
+  return isError ? { ...payload, _cli_is_error: true } : payload;
 }
 
 /** Run a dd-cli command in --beautify mode and return the plain text. */
