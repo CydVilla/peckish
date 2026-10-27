@@ -661,3 +661,15 @@ test("readSavedCards returns an empty list rather than throwing on junk", () => 
   assert.deepEqual(readSavedCards({}).cards, []);
   assert.equal(readSavedCards({}).unlisted_count, undefined);
 });
+
+test("a gated account is a normal answer, not a retryable failure", () => {
+  // Verified live on 0.2.6: an account with no Meal Manager team returns
+  // exit 4 / code "gated", NOT the empty calendars list the help describes.
+  const gated = new DdCliError("forbidden", "TOOL_FORBIDDEN", "gated");
+  assert.equal(isTransient(gated), false, "exit 4 must never be retried");
+  assert.equal(gated.code, "gated");
+  assert.deepEqual(parseErrorLine('{"error": {"code": "gated", "message": "TOOL_FORBIDDEN: nope"}}'), {
+    code: "gated",
+    message: "TOOL_FORBIDDEN: nope",
+  });
+});

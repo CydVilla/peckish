@@ -260,10 +260,18 @@ if (!pm.ok) {
 // --- 0.2.6 commands --------------------------------------------------------
 console.log("\n0.2.6 additions");
 const mm = await run(["meal-manager", "get-calendars"]);
+// `gated` (exit 4) means this account is not enrolled — a real answer about
+// the account, not a flag Peckish got wrong. Scoring it as a failure would
+// make a correct build look broken on any non-corporate account.
+const mmGated = !mm.ok && /"code":\s*"gated"|TOOL_FORBIDDEN/.test(mm.error ?? "");
 record(
   "meal-manager get-calendars (0.2.6)",
-  mm.ok,
-  mm.ok ? `calendars: ${(mm.payload.calendars ?? []).length} (empty is normal)` : mm.error,
+  mmGated ? null : mm.ok,
+  mmGated
+    ? "account not enrolled in Meal Manager (gated) — Peckish reports this as not_enabled, not an error"
+    : mm.ok
+      ? `calendars: ${(mm.payload.calendars ?? []).length} (empty is normal)`
+      : mm.error,
 );
 
 if (defaultAddress?.lat != null && defaultAddress?.lng != null) {
@@ -295,18 +303,25 @@ if (defaultAddress?.lat != null && defaultAddress?.lng != null) {
 
 // doubledash takes NO --intent, and is account-gated: a refusal is a real
 // answer about this account, not a Peckish bug.
-const ddOpts = await new Promise((resolve) => {
+// Needs exactly one of --order-uuid / --cart-uuid, so it can only run when
+// this account has a past order to point at.
+const ddOrderUuid = orders.length ? String(orders[0].order_uuid) : null;
+const ddOpts = ddOrderUuid === null ? null : await new Promise((resolve) => {
   execFile(
     DD_CLI,
-    ["--json-output", "doubledash", "options", "--max-stores", "3"],
+    ["--json-output", "doubledash", "options", "--order-uuid", ddOrderUuid, "--max-stores", "3"],
     { timeout: 90_000, maxBuffer: 32 * 1024 * 1024 },
     (err, stdout, stderr) => resolve({ err, out: `${stdout}\n${stderr}`.trim() }),
   );
 });
 record(
   "doubledash options reachable without --intent (0.2.6)",
-  ddOpts.err ? null : true,
-  ddOpts.err ? `not available on this account/order: ${ddOpts.out.slice(0, 200)}` : "accepted",
+  ddOpts === null || ddOpts.err ? null : true,
+  ddOpts === null
+    ? "no past order to attach a DoubleDash lookup to"
+    : ddOpts.err
+      ? `not available on this account/order: ${ddOpts.out.slice(0, 200)}`
+      : "accepted",
 );
 
 // --- summary ---------------------------------------------------------------

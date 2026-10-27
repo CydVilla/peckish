@@ -278,6 +278,29 @@ export function readSavedCards(res: Record<string, unknown>): {
 }
 
 /**
+ * Run an account-gated 0.2.6 lookup, treating "not enabled for this account"
+ * as an answer rather than a failure.
+ *
+ * DoubleDash and Meal Manager are enabled per account, and dd-cli says so
+ * with exit 4 / `error.code: "gated"`. Verified live: a consumer account with
+ * no Meal Manager team gets `gated`, not the empty `calendars` list the
+ * command's help describes. Letting that throw would surface a scary CLI
+ * error for the ordinary case of "your company doesn't use this", so the
+ * gate is converted to the same shape the unsupported-version path returns.
+ */
+async function gatedLookup<T extends Record<string, unknown>>(
+  run: () => Promise<Record<string, unknown>>,
+  onGated: T,
+): Promise<Record<string, unknown> | T> {
+  try {
+    return await run();
+  } catch (err) {
+    if (err instanceof DdCliError && err.code === "gated") return onGated;
+    throw err;
+  }
+}
+
+/**
  * Coordinates for the commands that take no --address-id at all
  * (`find-item-across-retailers`). Falls back to the default saved address,
  * which carries lat/lng of its own.
@@ -996,7 +1019,19 @@ export const toolHandlers: Record<string, Handler> = {
     }
     const args = ["meal-manager", "get-calendars"];
     if (date) args.push("--date", String(date));
-    const res = await ddJson(args, { retryOnce: true });
+    // Verified live on 0.2.6: an account with no Meal Manager team is
+    // `gated`, not an empty list as the command's help suggests.
+    const res = await gatedLookup(() => ddJson(args, { retryOnce: true }), {
+      calendars: [],
+      not_enabled: true,
+    });
+    if ((res as any).not_enabled) {
+      return j({
+        calendars: [],
+        not_enabled: true,
+        note: "This DoorDash account is not enrolled in Meal Manager (DoorDash for Work). That is a normal answer, not an error — tell the user their account has no corporate meal calendars and do not retry.",
+      });
+    }
     const calendars = (res.calendars as any[]) ?? [];
     return j({
       calendars,
@@ -1018,12 +1053,25 @@ export const toolHandlers: Record<string, Handler> = {
     if (order_uuid) args.push("--order-uuid", String(order_uuid));
     else if (cart_uuid) args.push("--cart-uuid", String(cart_uuid));
     if (max_stores != null) args.push("--max-stores", String(max_stores));
-    const res = await ddJson(args, { retryOnce: true });
-    const stores = (res.stores as any[]) ?? [];
+    // DoubleDash is enabled per account; `gated` means this one doesn't have
+    // it, which the model must treat as "say nothing", not as a failure.
+    const res = await gatedLookup(() => ddJson(args, { retryOnce: true }), {
+      stores: [],
+      not_enabled: true,
+    });
+    if ((res as any).not_enabled) {
+      return j({
+        stores: [],
+        not_enabled: true,
+        note: "DoubleDash is not available on this account. Say nothing about it to the user and do not retry.",
+      });
+    }
+    const ok = res as Record<string, unknown>;
+    const stores = (ok.stores as any[]) ?? [];
     return j({
       stores,
-      success: res.success,
-      message: res.message,
+      success: ok.success,
+      message: ok.message,
       note: stores.length
         ? "Items from these stores join the SAME delivery with no extra delivery fee. Adding one creates a cart — preview_order and submit_order it with the user's go-ahead, exactly like any other order."
         : "No stores can join this delivery. Say nothing to the user about DoubleDash.",

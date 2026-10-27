@@ -91,8 +91,19 @@ file's section for that version, every downloadable artifact, and a
   `export-token` paths cover the same machines today.
 - Flag and field names here were read from `--help` on a real 0.2.6 binary
   rather than from the release notes, which is how the two breaking changes
-  above were caught. The response *shapes* of the new commands still want a
-  live signed-in run: `node scripts/verify-dd-cli.mjs` now covers them.
+  above were caught. **Verified live against a signed-in 0.2.6 on 2026-10-27:
+  `node scripts/verify-dd-cli.mjs` reports 22 passed, 0 failed.** The run
+  confirmed the reshaped `payment-method list` (`card_id`, `display_name`,
+  `is_default`, `is_expired`, `unlisted_count`), every
+  `find-item-across-retailers` field name, and that `doubledash` is reachable
+  with no `--intent`. The envelope fix is confirmed by the run completing at
+  all — the old parser could not read a single 0.2.6 response.
+- That run also found that an account with **no Meal Manager team returns
+  `gated` (exit 4), not the empty `calendars` list the command's help
+  describes**. Both account-gated lookups now convert `gated` into a
+  `not_enabled` answer instead of surfacing a CLI error, since "your company
+  doesn't use this" is the ordinary case, not a fault. `verify-dd-cli.mjs`
+  scores `gated` as a skip rather than a failure for the same reason.
 
 ## [0.5.0] - 2026-09-25
 
