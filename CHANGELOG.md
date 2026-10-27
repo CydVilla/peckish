@@ -6,7 +6,7 @@ versions follow semver (0.x: minor = features, patch = fixes). Each release on
 file's section for that version, every downloadable artifact, and a
 `SHA256SUMS.txt` to verify them.
 
-## [Unreleased]
+## [0.6.0] - 2026-10-27
 
 ### Fixed
 - **dd-cli 0.2.6 removed the JSON envelope, and that broke every command.**
